@@ -188,3 +188,94 @@ impl ReviewPr {
         }
     }
 }
+
+// ============================================================================
+// Comment Thread Types (for viewing existing PR comments)
+// ============================================================================
+
+/// A comment author from GitHub API
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CommentUser {
+    pub login: String,
+}
+
+/// A single comment in a thread (used for both review and issue comments)
+#[derive(Debug, Clone)]
+pub struct ThreadComment {
+    pub id: u64,
+    pub body: String,
+    pub author: String,
+    pub created_at: String,
+    pub in_reply_to_id: Option<u64>,
+}
+
+/// A review comment (inline on code) from GitHub API
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ReviewComment {
+    pub id: u64,
+    pub body: String,
+    pub user: CommentUser,
+    pub path: String,
+    pub line: Option<u32>,
+    pub start_line: Option<u32>,
+    #[serde(rename = "created_at")]
+    pub created_at: String,
+    #[serde(default)]
+    pub in_reply_to_id: Option<u64>,
+}
+
+/// An issue comment (general PR comment) from GitHub API
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct IssueComment {
+    pub id: u64,
+    pub body: String,
+    pub user: CommentUser,
+    #[serde(rename = "created_at")]
+    pub created_at: String,
+}
+
+/// A comment thread (grouped by position or reply chain)
+#[derive(Debug, Clone)]
+pub struct CommentThread {
+    pub id: u64,                      // ID of root comment
+    pub file_path: Option<String>,    // None for general PR comments
+    pub line: Option<u32>,            // Line number for inline comments
+    pub start_line: Option<u32>,      // For multi-line comments
+    pub comments: Vec<ThreadComment>, // All comments in thread (root + replies)
+    pub is_resolved: bool,
+}
+
+impl CommentThread {
+    /// Check if this is an inline (review) comment thread
+    pub fn is_inline(&self) -> bool {
+        self.file_path.is_some()
+    }
+
+    /// Get the total number of comments in thread
+    pub fn comment_count(&self) -> usize {
+        self.comments.len()
+    }
+
+    /// Get a preview of the thread (first comment body truncated)
+    pub fn preview(&self, max_len: usize) -> String {
+        self.comments
+            .first()
+            .map(|c| {
+                let first_line = c.body.lines().next().unwrap_or("");
+                if first_line.len() > max_len {
+                    format!("{}...", &first_line[..max_len.saturating_sub(3)])
+                } else {
+                    first_line.to_string()
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the author of the first comment
+    pub fn author(&self) -> &str {
+        self.comments
+            .first()
+            .map(|c| c.author.as_str())
+            .unwrap_or("unknown")
+    }
+}

@@ -4,7 +4,7 @@ use std::process::Stdio;
 use tokio::process::Command;
 use url::Url;
 
-use crate::types::{PendingComment, PrInfo, ReviewPr};
+use crate::types::{CommentThread, IssueComment, PendingComment, PrInfo, ReviewComment, ReviewPr, ThreadComment};
 
 /// Parse a GitHub PR URL into owner, repo, and PR number
 pub fn parse_pr_url(url_str: &str) -> Result<PrInfo> {
@@ -399,6 +399,233 @@ pub async fn fetch_my_prs() -> Result<Vec<ReviewPr>> {
         .collect();
 
     Ok(prs)
+}
+
+// ============================================================================
+// Comment Thread Functions
+// ============================================================================
+
+/// Fetch review comments (inline on code) for a PR
+pub async fn fetch_pr_review_comments(pr: &PrInfo) -> Result<Vec<ReviewComment>> {
+    let output = Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{}/{}/pulls/{}/comments", pr.owner, pr.repo, pr.number),
+            "--paginate",
+        ])
+        .output()
+        .await
+        .context("Failed to fetch review comments")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("Failed to fetch review comments: {}", stderr));
+    }
+
+    let json_str = String::from_utf8(output.stdout).context("Invalid UTF-8")?;
+
+    // Handle empty response
+    if json_str.trim().is_empty() || json_str.trim() == "[]" {
+        return Ok(Vec::new());
+    }
+
+    let comments: Vec<ReviewComment> = serde_json::from_str(&json_str)
+        .context("Failed to parse review comments")?;
+
+    Ok(comments)
+}
+
+/// Fetch general PR comments (issue comments)
+pub async fn fetch_pr_issue_comments(pr: &PrInfo) -> Result<Vec<IssueComment>> {
+    let output = Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{}/{}/issues/{}/comments", pr.owner, pr.repo, pr.number),
+            "--paginate",
+        ])
+        .output()
+        .await
+        .context("Failed to fetch PR comments")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("Failed to fetch PR comments: {}", stderr));
+    }
+
+    let json_str = String::from_utf8(output.stdout).context("Invalid UTF-8")?;
+
+    // Handle empty response
+    if json_str.trim().is_empty() || json_str.trim() == "[]" {
+        return Ok(Vec::new());
+    }
+
+    let comments: Vec<IssueComment> = serde_json::from_str(&json_str)
+        .context("Failed to parse PR comments")?;
+
+    Ok(comments)
+}
+
+/// Fetch all comment threads for a PR (combines review + issue comments)
+pub async fn fetch_all_comment_threads(pr: &PrInfo) -> Result<Vec<CommentThread>> {
+    // Fetch both types concurrently
+    let (review_result, issue_result) = tokio::join!(
+        fetch_pr_review_comments(pr),
+        fetch_pr_issue_comments(pr)
+    );
+
+    let review_comments = review_result?;
+    let issue_comments = issue_result?;
+
+    let mut threads = Vec::new();
+
+    // Group review comments by reply chain (in_reply_to_id)
+    threads.extend(group_review_comments_into_threads(review_comments));
+
+    // Convert issue comments to threads (each is its own thread)
+    for comment in issue_comments {
+        threads.push(CommentThread {
+            id: comment.id,
+            file_path: None,
+            line: None,
+            start_line: None,
+            comments: vec![ThreadComment {
+                id: comment.id,
+                body: comment.body,
+                author: comment.user.login,
+                created_at: comment.created_at,
+                in_reply_to_id: None,
+            }],
+            is_resolved: false,
+        });
+    }
+
+    // Sort threads: inline comments by file/line, then general comments
+    threads.sort_by(|a, b| {
+        match (&a.file_path, &b.file_path) {
+            (Some(pa), Some(pb)) => pa.cmp(pb)
+                .then_with(|| a.line.cmp(&b.line)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.id.cmp(&b.id),
+        }
+    });
+
+    Ok(threads)
+}
+
+/// Group review comments into threads based on in_reply_to_id
+fn group_review_comments_into_threads(comments: Vec<ReviewComment>) -> Vec<CommentThread> {
+    use std::collections::HashMap;
+
+    if comments.is_empty() {
+        return Vec::new();
+    }
+
+    // Build a map of id -> comment and track replies
+    let mut by_id: HashMap<u64, &ReviewComment> = HashMap::new();
+    let mut replies: HashMap<u64, Vec<u64>> = HashMap::new(); // parent_id -> child_ids
+
+    for comment in &comments {
+        by_id.insert(comment.id, comment);
+        if let Some(parent_id) = comment.in_reply_to_id {
+            replies.entry(parent_id).or_default().push(comment.id);
+        }
+    }
+
+    // Find root comments (those with no in_reply_to_id)
+    let roots: Vec<u64> = comments
+        .iter()
+        .filter(|c| c.in_reply_to_id.is_none())
+        .map(|c| c.id)
+        .collect();
+
+    // Build threads from roots
+    let mut threads = Vec::new();
+    for root_id in roots {
+        let mut thread_comments = Vec::new();
+        let mut stack = vec![root_id];
+
+        while let Some(id) = stack.pop() {
+            if let Some(comment) = by_id.get(&id) {
+                thread_comments.push(ThreadComment {
+                    id: comment.id,
+                    body: comment.body.clone(),
+                    author: comment.user.login.clone(),
+                    created_at: comment.created_at.clone(),
+                    in_reply_to_id: comment.in_reply_to_id,
+                });
+
+                // Add children (in reverse order to maintain chronological order when popping)
+                if let Some(children) = replies.get(&id) {
+                    for child_id in children.iter().rev() {
+                        stack.push(*child_id);
+                    }
+                }
+            }
+        }
+
+        // Sort by creation time
+        thread_comments.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        if let Some(root) = by_id.get(&root_id) {
+            threads.push(CommentThread {
+                id: root_id,
+                file_path: Some(root.path.clone()),
+                line: root.line,
+                start_line: root.start_line,
+                comments: thread_comments,
+                is_resolved: false,
+            });
+        }
+    }
+
+    threads
+}
+
+/// Submit a reply to an existing comment thread
+pub async fn submit_thread_reply(
+    pr: &PrInfo,
+    thread: &CommentThread,
+    body: &str,
+) -> Result<()> {
+    let repo = format!("{}/{}", pr.owner, pr.repo);
+
+    if thread.is_inline() {
+        // Reply to review comment using in_reply_to
+        let output = Command::new("gh")
+            .args([
+                "api",
+                &format!("repos/{}/pulls/{}/comments", repo, pr.number),
+                "-f", &format!("body={}", body),
+                "-F", &format!("in_reply_to={}", thread.id),
+            ])
+            .output()
+            .await
+            .context("Failed to submit reply")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("Failed to submit reply: {}", stderr));
+        }
+    } else {
+        // Reply to issue comment (just add a new issue comment)
+        let output = Command::new("gh")
+            .args([
+                "api",
+                &format!("repos/{}/issues/{}/comments", repo, pr.number),
+                "-f", &format!("body={}", body),
+            ])
+            .output()
+            .await
+            .context("Failed to submit reply")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("Failed to submit reply: {}", stderr));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
