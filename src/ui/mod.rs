@@ -20,7 +20,7 @@ use ratatui::widgets::{
 use ratatui::Terminal;
 
 use crate::syntax::Highlighter;
-use crate::types::{DiffFile, LineKind, PendingComment, ReviewPr};
+use crate::types::{CommentThread, DiffFile, LineKind, PendingComment, ReviewPr};
 
 /// A node in the file tree (either a folder or a file)
 #[derive(Debug, Clone)]
@@ -108,6 +108,22 @@ pub enum CommentMode {
         inline_context: Option<(String, u32, Option<u32>)>,  // (path, end_line, optional start_line)
     },
     ViewingPending,         // Viewing list of pending comments
+    /// Viewing list of existing comment threads
+    ViewingThreads {
+        selected: usize,
+        scroll: usize,
+    },
+    /// Viewing a single thread's details
+    ViewingThread {
+        index: usize,
+        selected: usize,
+        scroll: usize,
+    },
+    /// Composing a reply to a thread
+    ReplyingToThread {
+        index: usize,
+        text: String,
+    },
 }
 
 /// Help display state
@@ -181,6 +197,10 @@ pub struct App {
 
     // Help display
     help_mode: HelpMode,
+
+    // Comment threads (existing comments from GitHub)
+    comment_threads: Vec<CommentThread>,
+    line_to_threads: HashMap<(String, u32), Vec<usize>>,  // Quick lookup: (file_path, line) -> thread indices
 }
 
 impl App {
@@ -236,6 +256,9 @@ impl App {
             selection_anchor: 0,
 
             help_mode: HelpMode::None,
+
+            comment_threads: Vec::new(),
+            line_to_threads: HashMap::new(),
         }
     }
 
@@ -313,6 +336,9 @@ impl App {
             selection_anchor: 0,
 
             help_mode: HelpMode::None,
+
+            comment_threads: Vec::new(),
+            line_to_threads: HashMap::new(),
         }
     }
 
@@ -575,6 +601,8 @@ impl App {
                             if let Some(ref mut pr) = self.current_pr {
                                 pr.head_sha = head_sha;
                             }
+                            // Load existing comment threads from GitHub
+                            self.load_comment_threads();
                         }
                         Err(e) => {
                             self.loading = LoadingState::Error(e);
@@ -824,6 +852,139 @@ impl App {
             return;
         }
 
+        // Handle viewing threads list mode
+        if let CommentMode::ViewingThreads { ref mut selected, scroll: _ } = self.comment_mode {
+            match key.code {
+                KeyCode::Esc => {
+                    self.comment_mode = CommentMode::None;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if !self.comment_threads.is_empty() && *selected < self.comment_threads.len() - 1 {
+                        *selected += 1;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    // Open thread detail view
+                    let idx = *selected;
+                    self.comment_mode = CommentMode::ViewingThread {
+                        index: idx,
+                        selected: 0,
+                        scroll: 0,
+                    };
+                }
+                KeyCode::Char('r') => {
+                    // Start reply
+                    let idx = *selected;
+                    self.comment_mode = CommentMode::ReplyingToThread {
+                        index: idx,
+                        text: String::new(),
+                    };
+                }
+                KeyCode::Char('g') => {
+                    // Jump to thread location in diff
+                    let idx = *selected;
+                    // Extract data before mutable operations
+                    let thread_info = self.comment_threads.get(idx)
+                        .and_then(|t| t.file_path.as_ref().map(|p| (p.clone(), t.line)));
+
+                    if let Some((path, line)) = thread_info {
+                        // Find file index and switch to it
+                        if let Some(file_idx) = self.files.iter().position(|f| f.path == path) {
+                            self.select_file(file_idx);
+                            self.focus = Focus::Diff;
+                            // Try to scroll to the line
+                            if let Some(ln) = line {
+                                self.scroll_offset = (ln as usize).saturating_sub(5);
+                            }
+                        }
+                        self.comment_mode = CommentMode::None;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Handle viewing single thread detail mode
+        if let CommentMode::ViewingThread { index, ref mut selected, scroll: _ } = self.comment_mode {
+            match key.code {
+                KeyCode::Esc => {
+                    // Go back to thread list
+                    let idx = index;
+                    self.comment_mode = CommentMode::ViewingThreads {
+                        selected: idx,
+                        scroll: 0,
+                    };
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if let Some(thread) = self.comment_threads.get(index) {
+                        if *selected < thread.comments.len().saturating_sub(1) {
+                            *selected += 1;
+                        }
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                }
+                KeyCode::Char('r') => {
+                    let idx = index;
+                    self.comment_mode = CommentMode::ReplyingToThread {
+                        index: idx,
+                        text: String::new(),
+                    };
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Handle reply to thread mode
+        if let CommentMode::ReplyingToThread { index, ref mut text } = self.comment_mode {
+            // Check for save shortcuts: Ctrl+Enter, Ctrl+S, or Alt+Enter
+            let is_save = match key.code {
+                KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => true,
+                KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => true,
+                KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => true,
+                _ => false,
+            };
+
+            if is_save && !text.is_empty() {
+                let idx = index;
+                let reply_text = text.clone();
+                self.submit_thread_reply(idx, &reply_text);
+                return;
+            }
+
+            match key.code {
+                KeyCode::Esc => {
+                    let idx = index;
+                    self.comment_mode = CommentMode::ViewingThread {
+                        index: idx,
+                        selected: 0,
+                        scroll: 0,
+                    };
+                }
+                KeyCode::Enter => {
+                    text.push('\n');
+                }
+                KeyCode::Backspace => {
+                    text.pop();
+                }
+                KeyCode::Char(c) => {
+                    text.push(c);
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // Handle search mode input
         if self.search_mode {
             match key.code {
@@ -951,6 +1112,21 @@ impl App {
                 // Submit all pending comments
                 if !self.pending_comments.is_empty() && self.current_pr.is_some() {
                     self.submit_pending_comments();
+                }
+            }
+            KeyCode::Char('t') => {
+                // View comment threads
+                if self.current_pr.is_some() && !self.comment_threads.is_empty() {
+                    self.comment_mode = CommentMode::ViewingThreads {
+                        selected: 0,
+                        scroll: 0,
+                    };
+                }
+            }
+            KeyCode::Char('T') => {
+                // Refresh comment threads
+                if self.current_pr.is_some() {
+                    self.load_comment_threads();
                 }
             }
             KeyCode::Char('?') => {
@@ -1291,6 +1467,46 @@ impl App {
         }
     }
 
+    /// Submit a reply to an existing comment thread
+    fn submit_thread_reply(&mut self, thread_index: usize, body: &str) {
+        let Some(ref pr) = self.current_pr else {
+            return;
+        };
+        let Some(thread) = self.comment_threads.get(thread_index).cloned() else {
+            return;
+        };
+
+        let pr_info = pr.to_pr_info();
+        let body_clone = body.to_string();
+
+        self.loading = LoadingState::Loading("Submitting reply...".to_string());
+
+        // Submit in a separate thread
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(crate::github::submit_thread_reply(&pr_info, &thread, &body_clone))
+        });
+
+        match handle.join() {
+            Ok(Ok(())) => {
+                self.loading = LoadingState::Success("Reply submitted!".to_string());
+                // Refresh threads to show new reply
+                self.load_comment_threads();
+                // Go back to threads list
+                self.comment_mode = CommentMode::ViewingThreads {
+                    selected: thread_index,
+                    scroll: 0,
+                };
+            }
+            Ok(Err(e)) => {
+                self.loading = LoadingState::Error(format!("Failed: {}", e));
+            }
+            Err(_) => {
+                self.loading = LoadingState::Error("Thread panicked".to_string());
+            }
+        }
+    }
+
     /// Save current drafts to disk
     fn save_current_drafts(&self) {
         if let Some(ref pr) = self.current_pr {
@@ -1309,6 +1525,66 @@ impl App {
             self.pending_comments = crate::drafts::load_drafts(&pr_info);
             self.selected_pending_comment = 0;
         }
+    }
+
+    /// Load comment threads for the current PR from GitHub
+    fn load_comment_threads(&mut self) {
+        let Some(ref pr) = self.current_pr else {
+            return;
+        };
+
+        let pr_info = pr.to_pr_info();
+
+        // Spawn a thread to fetch comments (blocking)
+        let handle = std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(crate::github::fetch_all_comment_threads(&pr_info))
+        });
+
+        match handle.join() {
+            Ok(Ok(threads)) => {
+                self.build_line_to_threads_map(&threads);
+                self.comment_threads = threads;
+            }
+            Ok(Err(e)) => {
+                // Silently ignore thread loading errors - they're not critical
+                eprintln!("Warning: Failed to load comment threads: {}", e);
+                self.comment_threads = Vec::new();
+                self.line_to_threads.clear();
+            }
+            Err(_) => {
+                eprintln!("Warning: Thread panicked while loading comments");
+                self.comment_threads = Vec::new();
+                self.line_to_threads.clear();
+            }
+        }
+    }
+
+    /// Build lookup map from (file, line) to thread indices
+    fn build_line_to_threads_map(&mut self, threads: &[CommentThread]) {
+        self.line_to_threads.clear();
+        for (idx, thread) in threads.iter().enumerate() {
+            if let (Some(path), Some(line)) = (&thread.file_path, thread.line) {
+                self.line_to_threads
+                    .entry((path.clone(), line))
+                    .or_default()
+                    .push(idx);
+            }
+        }
+    }
+
+    /// Check if there are any threads at a given line
+    fn has_threads_at_line(&self, file_path: &str, line: u32) -> bool {
+        self.line_to_threads
+            .contains_key(&(file_path.to_string(), line))
+    }
+
+    /// Get count of threads at a line
+    fn thread_count_at_line(&self, file_path: &str, line: u32) -> usize {
+        self.line_to_threads
+            .get(&(file_path.to_string(), line))
+            .map(|v| v.len())
+            .unwrap_or(0)
     }
 
     fn update_filtered_indices(&mut self) {
@@ -1658,7 +1934,7 @@ impl App {
         let popup_width = 60.min(area.width.saturating_sub(4));
         let popup_height = match self.help_mode {
             HelpMode::PrList => 18,
-            HelpMode::DiffView => 26,
+            HelpMode::DiffView => 28,  // Increased for thread commands
             HelpMode::None => return,
         };
         let popup_height = popup_height.min(area.height.saturating_sub(4));
@@ -1721,6 +1997,8 @@ impl App {
                 ("c", "Comment on current line/selection"),
                 ("C", "View pending comments"),
                 ("S", "Submit all pending comments"),
+                ("t", "View comment threads"),
+                ("T", "Refresh comment threads"),
                 ("o", "Open PR in browser"),
                 ("Esc", "Exit visual mode / go back"),
                 ("q", "Back to PR list / quit"),
@@ -2145,6 +2423,17 @@ impl App {
             CommentMode::ViewingPending => {
                 self.render_pending_comments(frame, area);
             }
+            CommentMode::ViewingThreads { selected, scroll } => {
+                self.render_threads_list(frame, area, *selected, *scroll);
+            }
+            CommentMode::ViewingThread { index, selected, scroll } => {
+                self.render_thread_detail(frame, area, *index, *selected, *scroll);
+            }
+            CommentMode::ReplyingToThread { index, text } => {
+                // Show thread detail in background + reply input overlay
+                self.render_thread_detail(frame, area, *index, 0, 0);
+                self.render_reply_input(frame, area, text);
+            }
         }
     }
 
@@ -2328,6 +2617,301 @@ impl App {
 
             y += 1;
         }
+    }
+
+    fn render_threads_list(&self, frame: &mut ratatui::Frame, area: Rect, selected: usize, scroll: usize) {
+        let popup_width = (area.width * 3 / 4).min(100);
+        let popup_height = (area.height * 2 / 3).min(25);
+        let popup_x = area.x + (area.width - popup_width) / 2;
+        let popup_y = area.y + (area.height - popup_height) / 2;
+
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        let title = format!(
+            " Comment Threads ({}) - j/k:nav  Enter:view  r:reply  g:goto  Esc:close ",
+            self.comment_threads.len()
+        );
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta));
+
+        let inner_area = block.inner(popup_area);
+
+        // Clear background
+        let buf = frame.buffer_mut();
+        for y in popup_area.y..popup_area.y + popup_area.height {
+            for x in popup_area.x..popup_area.x + popup_area.width {
+                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(35, 35, 45)));
+            }
+        }
+
+        frame.render_widget(block, popup_area);
+
+        if self.comment_threads.is_empty() {
+            let buf = frame.buffer_mut();
+            buf.set_string(
+                inner_area.x,
+                inner_area.y,
+                "No comment threads on this PR",
+                Style::default().fg(Color::DarkGray).bg(Color::Rgb(35, 35, 45)),
+            );
+            return;
+        }
+
+        let buf = frame.buffer_mut();
+
+        // Render thread list
+        for (row, (idx, thread)) in self.comment_threads
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(inner_area.height as usize)
+            .enumerate()
+        {
+            let y = inner_area.y + row as u16;
+            let is_selected = idx == selected;
+
+            let style = if is_selected {
+                Style::default().fg(Color::White).bg(Color::Rgb(60, 60, 80))
+            } else {
+                Style::default().fg(Color::White).bg(Color::Rgb(35, 35, 45))
+            };
+
+            // Clear line
+            for x in inner_area.x..inner_area.x + inner_area.width {
+                buf.set_string(x, y, " ", style);
+            }
+
+            // Thread location
+            let location = if let Some(path) = &thread.file_path {
+                let short_path = if path.len() > 25 {
+                    format!("...{}", &path[path.len()-22..])
+                } else {
+                    path.clone()
+                };
+                if let Some(line) = thread.line {
+                    format!("[{}:{}]", short_path, line)
+                } else {
+                    format!("[{}]", short_path)
+                }
+            } else {
+                "[General]".to_string()
+            };
+
+            let comment_count = format!(" ({})", thread.comment_count());
+            let author = format!(" @{}", thread.author());
+
+            // Render location
+            buf.set_string(inner_area.x, y, &location, style.fg(Color::Cyan));
+
+            // Render count
+            let count_x = inner_area.x + location.len() as u16;
+            buf.set_string(count_x, y, &comment_count, style.fg(Color::Yellow));
+
+            // Render author
+            let author_x = count_x + comment_count.len() as u16;
+            buf.set_string(author_x, y, &author, style.fg(Color::Green));
+
+            // Preview of first comment
+            let preview_x = author_x + author.len() as u16 + 1;
+            let available = (inner_area.width as usize).saturating_sub((preview_x - inner_area.x) as usize);
+            let preview = thread.preview(available);
+            buf.set_string(preview_x, y, &preview, style.fg(Color::Gray));
+        }
+    }
+
+    fn render_thread_detail(&self, frame: &mut ratatui::Frame, area: Rect, thread_idx: usize, selected: usize, scroll: usize) {
+        let Some(thread) = self.comment_threads.get(thread_idx) else {
+            return;
+        };
+
+        let popup_width = (area.width * 4 / 5).min(120);
+        let popup_height = (area.height * 3 / 4).min(30);
+        let popup_x = area.x + (area.width - popup_width) / 2;
+        let popup_y = area.y + (area.height - popup_height) / 2;
+
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        let location = if let Some(path) = &thread.file_path {
+            if let Some(line) = thread.line {
+                format!("{}:{}", path, line)
+            } else {
+                path.clone()
+            }
+        } else {
+            "General Comment".to_string()
+        };
+
+        let title = format!(" {} - j/k:nav  r:reply  Esc:back ", location);
+
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let inner_area = block.inner(popup_area);
+
+        // Clear background
+        let buf = frame.buffer_mut();
+        for y in popup_area.y..popup_area.y + popup_area.height {
+            for x in popup_area.x..popup_area.x + popup_area.width {
+                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(30, 30, 40)));
+            }
+        }
+
+        frame.render_widget(block, popup_area);
+
+        let buf = frame.buffer_mut();
+
+        // Render comments
+        let mut y = inner_area.y;
+        for (idx, comment) in thread.comments.iter().enumerate().skip(scroll) {
+            if y >= inner_area.y + inner_area.height - 1 {
+                break;
+            }
+
+            let is_selected = idx == selected;
+            let bg = if is_selected {
+                Color::Rgb(50, 50, 70)
+            } else {
+                Color::Rgb(30, 30, 40)
+            };
+
+            // Author and timestamp
+            let time_ago = Self::format_relative_time(&comment.created_at);
+            let header = format!("@{} - {}", comment.author, time_ago);
+            buf.set_string(
+                inner_area.x,
+                y,
+                &header,
+                Style::default().fg(Color::Green).bg(bg).add_modifier(Modifier::BOLD),
+            );
+            y += 1;
+
+            // Comment body (word-wrapped)
+            let wrapped = Self::wrap_text(&comment.body, (inner_area.width as usize).saturating_sub(2));
+            for line in wrapped {
+                if y >= inner_area.y + inner_area.height {
+                    break;
+                }
+                buf.set_string(
+                    inner_area.x + 1,
+                    y,
+                    &line,
+                    Style::default().fg(Color::White).bg(bg),
+                );
+                y += 1;
+            }
+
+            // Separator
+            y += 1;
+        }
+    }
+
+    fn render_reply_input(&self, frame: &mut ratatui::Frame, area: Rect, text: &str) {
+        let popup_width = (area.width * 2 / 3).min(80);
+        let popup_height = 10;
+        let popup_x = area.x + (area.width - popup_width) / 2;
+        let popup_y = area.y + (area.height - popup_height) / 2;
+
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        let title = " Reply (Ctrl+S to send, Esc to cancel) ";
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Green));
+
+        let inner_area = block.inner(popup_area);
+
+        // Clear and render
+        let buf = frame.buffer_mut();
+        for y in popup_area.y..popup_area.y + popup_area.height {
+            for x in popup_area.x..popup_area.x + popup_area.width {
+                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(40, 50, 40)));
+            }
+        }
+
+        frame.render_widget(block, popup_area);
+
+        let display_text = format!("{}_", text);
+        let buf = frame.buffer_mut();
+        for (i, line) in display_text.lines().enumerate() {
+            if i as u16 >= inner_area.height {
+                break;
+            }
+            let truncated: String = line.chars().take(inner_area.width as usize).collect();
+            buf.set_string(
+                inner_area.x,
+                inner_area.y + i as u16,
+                &truncated,
+                Style::default().fg(Color::White).bg(Color::Rgb(40, 50, 40)),
+            );
+        }
+    }
+
+    /// Format time as relative (e.g., "2h ago", "3d ago")
+    fn format_relative_time(iso_time: &str) -> String {
+        chrono::DateTime::parse_from_rfc3339(iso_time)
+            .map(|dt| {
+                let now = chrono::Utc::now();
+                let diff = now.signed_duration_since(dt);
+                if diff.num_hours() < 1 {
+                    format!("{}m ago", diff.num_minutes())
+                } else if diff.num_days() < 1 {
+                    format!("{}h ago", diff.num_hours())
+                } else {
+                    format!("{}d ago", diff.num_days())
+                }
+            })
+            .unwrap_or_else(|_| iso_time.to_string())
+    }
+
+    /// Simple word wrapping for text
+    fn wrap_text(text: &str, width: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        for line in text.lines() {
+            if line.len() <= width {
+                lines.push(line.to_string());
+            } else {
+                let mut current = String::new();
+                for word in line.split_whitespace() {
+                    if current.len() + word.len() + 1 > width {
+                        if !current.is_empty() {
+                            lines.push(current);
+                            current = String::new();
+                        }
+                    }
+                    if !current.is_empty() {
+                        current.push(' ');
+                    }
+                    current.push_str(word);
+                }
+                if !current.is_empty() {
+                    lines.push(current);
+                }
+            }
+        }
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines
     }
 
     fn render_tree(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -2681,7 +3265,20 @@ impl App {
                     };
                     buf.set_string(area.x + 1, y, &gutter, gutter_style);
 
-                    let content_start_x = area.x + gutter_width as u16;
+                    // Comment thread indicator
+                    let indicator_x = area.x + gutter_width as u16;
+                    let has_comment = new_ln.map(|ln| self.has_threads_at_line(&file.path, ln)).unwrap_or(false);
+                    if has_comment {
+                        let count = new_ln.map(|ln| self.thread_count_at_line(&file.path, ln)).unwrap_or(0);
+                        let indicator = if count > 1 { format!("{}", count) } else { "C".to_string() };
+                        let indicator_style = Style::default()
+                            .fg(Color::Yellow)
+                            .bg(bg)
+                            .add_modifier(Modifier::BOLD);
+                        buf.set_string(indicator_x, y, &indicator, indicator_style);
+                    }
+
+                    let content_start_x = area.x + gutter_width as u16 + 2;  // +2 for indicator space
                     let max_x = area.x + area.width;
 
                     // First render raw content as fallback (in case spans don't cover everything)
@@ -2882,7 +3479,19 @@ impl App {
 
         buf.set_string(x, y, &gutter, Style::default().fg(Color::DarkGray).bg(bg));
 
-        let content_start_x = x + gutter_len;
+        // Comment thread indicator
+        let indicator_x = x + gutter_len;
+        if self.has_threads_at_line(path, ln) {
+            let count = self.thread_count_at_line(path, ln);
+            let indicator = if count > 1 { format!("{}", count) } else { "C".to_string() };
+            let indicator_style = Style::default()
+                .fg(Color::Yellow)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD);
+            buf.set_string(indicator_x, y, &indicator, indicator_style);
+        }
+
+        let content_start_x = x + gutter_len + 2;  // +2 for indicator space
 
         // First render raw content as fallback (in case spans don't cover everything)
         let default_style = Style::default().fg(Color::White).bg(bg);
