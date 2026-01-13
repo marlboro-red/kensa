@@ -120,13 +120,13 @@ struct GhAuthor {
     login: String,
 }
 
-/// Fetch all PRs where review is requested from the current user
-pub async fn fetch_review_prs() -> Result<Vec<ReviewPr>> {
+/// Common helper for searching PRs with a specific filter
+async fn search_prs_with_filter(filter: &str) -> Result<Vec<ReviewPr>> {
     let output = Command::new("gh")
         .args([
             "search",
             "prs",
-            "--review-requested=@me",
+            filter,
             "--state=open",
             "--json=number,title,repository,author,createdAt,url",
             "--limit=100",
@@ -161,12 +161,17 @@ pub async fn fetch_review_prs() -> Result<Vec<ReviewPr>> {
                 repo_name,
                 author: r.author.login,
                 created_at: r.created_at,
-                head_sha: None,  // Fetched lazily when needed
+                head_sha: None,
             }
         })
         .collect();
 
     Ok(prs)
+}
+
+/// Fetch all PRs where review is requested from the current user
+pub async fn fetch_review_prs() -> Result<Vec<ReviewPr>> {
+    search_prs_with_filter("--review-requested=@me").await
 }
 
 /// Fetch the head SHA for a PR (needed for inline comments)
@@ -296,16 +301,9 @@ pub async fn submit_pr_comments(pr: &PrInfo, comments: &[PendingComment], head_s
     Ok(submitted)
 }
 
-/// Batch submit inline comments using the Review API (single API call for all inline comments)
-async fn submit_inline_comments_batch(pr: &PrInfo, comments: &[&PendingComment], commit_id: &str) -> Result<usize> {
-    if comments.is_empty() {
-        return Ok(0);
-    }
-
-    let repo = format!("{}/{}", pr.owner, pr.repo);
-
-    // Build the comments array for the Review API
-    let review_comments: Vec<serde_json::Value> = comments
+/// Build review comments JSON array for the GitHub Review API
+fn build_review_comments_json(comments: &[&PendingComment]) -> Vec<serde_json::Value> {
+    comments
         .iter()
         .map(|c| {
             let mut comment_obj = serde_json::json!({
@@ -315,7 +313,6 @@ async fn submit_inline_comments_batch(pr: &PrInfo, comments: &[&PendingComment],
                 "side": "RIGHT"
             });
 
-            // Add start_line for multi-line comments
             if let Some(start_line) = c.start_line {
                 comment_obj["start_line"] = serde_json::json!(start_line);
                 comment_obj["start_side"] = serde_json::json!("RIGHT");
@@ -323,7 +320,17 @@ async fn submit_inline_comments_batch(pr: &PrInfo, comments: &[&PendingComment],
 
             comment_obj
         })
-        .collect();
+        .collect()
+}
+
+/// Batch submit inline comments using the Review API (single API call for all inline comments)
+async fn submit_inline_comments_batch(pr: &PrInfo, comments: &[&PendingComment], commit_id: &str) -> Result<usize> {
+    if comments.is_empty() {
+        return Ok(0);
+    }
+
+    let repo = format!("{}/{}", pr.owner, pr.repo);
+    let review_comments = build_review_comments_json(comments);
 
     // Build the complete request body as JSON
     let request_body = serde_json::json!({
@@ -368,51 +375,7 @@ async fn submit_inline_comments_batch(pr: &PrInfo, comments: &[&PendingComment],
 
 /// Fetch PRs authored by the current user
 pub async fn fetch_my_prs() -> Result<Vec<ReviewPr>> {
-    let output = Command::new("gh")
-        .args([
-            "search",
-            "prs",
-            "--author=@me",
-            "--state=open",
-            "--json=number,title,repository,author,createdAt,url",
-            "--limit=100",
-        ])
-        .output()
-        .await
-        .context("Failed to fetch PRs. Is 'gh' CLI installed?")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("Failed to search PRs: {}", stderr));
-    }
-
-    let json_str = String::from_utf8(output.stdout).context("Invalid UTF-8 in response")?;
-    let results: Vec<GhSearchPrResult> =
-        serde_json::from_str(&json_str).context("Failed to parse PR list JSON")?;
-
-    let prs = results
-        .into_iter()
-        .map(|r| {
-            let (repo_owner, repo_name) = r
-                .repository
-                .name_with_owner
-                .split_once('/')
-                .map(|(o, n)| (o.to_string(), n.to_string()))
-                .unwrap_or((String::new(), r.repository.name));
-
-            ReviewPr {
-                number: r.number,
-                title: r.title,
-                repo_owner,
-                repo_name,
-                author: r.author.login,
-                created_at: r.created_at,
-                head_sha: None,  // Fetched lazily when needed
-            }
-        })
-        .collect();
-
-    Ok(prs)
+    search_prs_with_filter("--author=@me").await
 }
 
 // ============================================================================
@@ -665,24 +628,7 @@ pub async fn submit_pr_review(
     };
 
     // Build the review comments array for inline comments
-    let review_comments: Vec<serde_json::Value> = inline_comments
-        .iter()
-        .map(|c| {
-            let mut comment_obj = serde_json::json!({
-                "path": c.file_path.as_ref().unwrap(),
-                "line": c.line_number.unwrap(),
-                "body": c.body,
-                "side": "RIGHT"
-            });
-
-            if let Some(start_line) = c.start_line {
-                comment_obj["start_line"] = serde_json::json!(start_line);
-                comment_obj["start_side"] = serde_json::json!("RIGHT");
-            }
-
-            comment_obj
-        })
-        .collect();
+    let review_comments = build_review_comments_json(&inline_comments);
 
     // Build the request body
     let mut request_body = serde_json::json!({

@@ -375,6 +375,38 @@ impl App {
         }
     }
 
+    // ========================================================================
+    // UI Helper Functions
+    // ========================================================================
+
+    /// Create a centered popup area within the given container
+    fn centered_popup(container: Rect, width: u16, height: u16) -> Rect {
+        let popup_width = width.min(container.width.saturating_sub(4));
+        let popup_height = height.min(container.height.saturating_sub(4));
+        let popup_x = container.x + (container.width - popup_width) / 2;
+        let popup_y = container.y + (container.height - popup_height) / 2;
+        Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        }
+    }
+
+    /// Clear the background of an area with a solid color
+    fn clear_popup_background(buf: &mut Buffer, area: Rect, color: Color) {
+        let style = Style::default().bg(color);
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                buf.set_string(x, y, " ", style);
+            }
+        }
+    }
+
+    // ========================================================================
+    // Tree Building
+    // ========================================================================
+
     /// Build a tree structure from the flat file list
     fn build_tree(&self) -> Vec<TreeNode> {
         let mut root: HashMap<String, TreeNode> = HashMap::new();
@@ -2330,32 +2362,14 @@ impl App {
     fn render_help(&self, frame: &mut ratatui::Frame) {
         let area = frame.area();
 
-        // Create centered popup
-        let popup_width = 60.min(area.width.saturating_sub(4));
         let popup_height = match self.help_mode {
             HelpMode::PrList => 18,
             HelpMode::DiffView => 30, // Increased for horizontal scroll + thread commands
             HelpMode::None => return,
         };
-        let popup_height = popup_height.min(area.height.saturating_sub(4));
 
-        let popup_x = area.x + (area.width - popup_width) / 2;
-        let popup_y = area.y + (area.height - popup_height) / 2;
-
-        let popup_area = Rect {
-            x: popup_x,
-            y: popup_y,
-            width: popup_width,
-            height: popup_height,
-        };
-
-        // Clear background
-        let buf = frame.buffer_mut();
-        for y in popup_area.y..popup_area.y + popup_area.height {
-            for x in popup_area.x..popup_area.x + popup_area.width {
-                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(30, 30, 40)));
-            }
-        }
+        let popup_area = Self::centered_popup(area, 60, popup_height);
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(30, 30, 40));
 
         let title = " Keyboard Shortcuts (press any key to close) ";
         let block = Block::default()
@@ -2945,16 +2959,7 @@ impl App {
     ) {
         // Create a centered popup for comment input
         let popup_width = (area.width * 2 / 3).min(80);
-        let popup_height = 12;
-        let popup_x = area.x + (area.width - popup_width) / 2;
-        let popup_y = area.y + (area.height - popup_height) / 2;
-
-        let popup_area = Rect {
-            x: popup_x,
-            y: popup_y,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_area = Self::centered_popup(area, popup_width, 12);
 
         let title = match inline_context {
             Some((path, end_line, Some(start_line))) => {
@@ -2992,17 +2997,7 @@ impl App {
             .border_style(Style::default().fg(Color::Cyan));
 
         let inner_area = block.inner(popup_area);
-
-        // Clear background and render block
-        {
-            let buf = frame.buffer_mut();
-            for y in popup_area.y..popup_area.y + popup_area.height {
-                for x in popup_area.x..popup_area.x + popup_area.width {
-                    buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(40, 40, 50)));
-                }
-            }
-        }
-
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(40, 40, 50));
         frame.render_widget(block, popup_area);
 
         // Render the text with word wrapping and cursor
@@ -3042,18 +3037,9 @@ impl App {
     }
 
     fn render_pending_comments(&self, frame: &mut ratatui::Frame, area: Rect) {
-        // Create a centered popup for viewing pending comments
         let popup_width = (area.width * 3 / 4).min(100);
         let popup_height = (area.height * 2 / 3).min(20);
-        let popup_x = area.x + (area.width - popup_width) / 2;
-        let popup_y = area.y + (area.height - popup_height) / 2;
-
-        let popup_area = Rect {
-            x: popup_x,
-            y: popup_y,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_area = Self::centered_popup(area, popup_width, popup_height);
 
         let title = format!(
             " Pending Comments ({}) - j/k:nav  e:edit  d:delete  S:submit  Esc:close ",
@@ -3065,17 +3051,7 @@ impl App {
             .border_style(Style::default().fg(Color::Yellow));
 
         let inner_area = block.inner(popup_area);
-
-        // Clear background
-        {
-            let buf = frame.buffer_mut();
-            for y in popup_area.y..popup_area.y + popup_area.height {
-                for x in popup_area.x..popup_area.x + popup_area.width {
-                    buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(40, 40, 50)));
-                }
-            }
-        }
-
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(40, 40, 50));
         frame.render_widget(block, popup_area);
 
         let buf = frame.buffer_mut();
@@ -3172,15 +3148,7 @@ impl App {
     ) {
         let popup_width = (area.width * 3 / 4).min(100);
         let popup_height = (area.height * 2 / 3).min(25);
-        let popup_x = area.x + (area.width - popup_width) / 2;
-        let popup_y = area.y + (area.height - popup_height) / 2;
-
-        let popup_area = Rect {
-            x: popup_x,
-            y: popup_y,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_area = Self::centered_popup(area, popup_width, popup_height);
 
         let title = format!(
             " Comment Threads ({}) - j/k:nav  Enter:view  r:reply  g:goto  Esc:close ",
@@ -3192,15 +3160,7 @@ impl App {
             .border_style(Style::default().fg(Color::Magenta));
 
         let inner_area = block.inner(popup_area);
-
-        // Clear background
-        let buf = frame.buffer_mut();
-        for y in popup_area.y..popup_area.y + popup_area.height {
-            for x in popup_area.x..popup_area.x + popup_area.width {
-                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(35, 35, 45)));
-            }
-        }
-
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(35, 35, 45));
         frame.render_widget(block, popup_area);
 
         if self.comment_threads.is_empty() {
@@ -3294,15 +3254,7 @@ impl App {
 
         let popup_width = (area.width * 4 / 5).min(120);
         let popup_height = (area.height * 3 / 4).min(30);
-        let popup_x = area.x + (area.width - popup_width) / 2;
-        let popup_y = area.y + (area.height - popup_height) / 2;
-
-        let popup_area = Rect {
-            x: popup_x,
-            y: popup_y,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_area = Self::centered_popup(area, popup_width, popup_height);
 
         let location = if let Some(path) = &thread.file_path {
             if let Some(line) = thread.line {
@@ -3322,15 +3274,7 @@ impl App {
             .border_style(Style::default().fg(Color::Cyan));
 
         let inner_area = block.inner(popup_area);
-
-        // Clear background
-        let buf = frame.buffer_mut();
-        for y in popup_area.y..popup_area.y + popup_area.height {
-            for x in popup_area.x..popup_area.x + popup_area.width {
-                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(30, 30, 40)));
-            }
-        }
-
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(30, 30, 40));
         frame.render_widget(block, popup_area);
 
         // Pre-calculate all lines for scrolling
@@ -3393,16 +3337,7 @@ impl App {
 
     fn render_reply_input(&self, frame: &mut ratatui::Frame, area: Rect, text: &str) {
         let popup_width = (area.width * 2 / 3).min(80);
-        let popup_height = 10;
-        let popup_x = area.x + (area.width - popup_width) / 2;
-        let popup_y = area.y + (area.height - popup_height) / 2;
-
-        let popup_area = Rect {
-            x: popup_x,
-            y: popup_y,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_area = Self::centered_popup(area, popup_width, 10);
 
         let title = " Reply (Ctrl+S to send, Esc to cancel) ";
         let block = Block::default()
@@ -3411,15 +3346,7 @@ impl App {
             .border_style(Style::default().fg(Color::Green));
 
         let inner_area = block.inner(popup_area);
-
-        // Clear and render
-        let buf = frame.buffer_mut();
-        for y in popup_area.y..popup_area.y + popup_area.height {
-            for x in popup_area.x..popup_area.x + popup_area.width {
-                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(40, 50, 40)));
-            }
-        }
-
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(40, 50, 40));
         frame.render_widget(block, popup_area);
 
         // Render the text with word wrapping and cursor
@@ -3468,15 +3395,7 @@ impl App {
     ) {
         let popup_width = (area.width * 2 / 3).min(80);
         let popup_height = if reviewing_drafts { 22 } else { 20 };
-        let popup_x = area.x + (area.width - popup_width) / 2;
-        let popup_y = area.y + (area.height - popup_height) / 2;
-
-        let popup_area = Rect {
-            x: popup_x,
-            y: popup_y,
-            width: popup_width,
-            height: popup_height,
-        };
+        let popup_area = Self::centered_popup(area, popup_width, popup_height);
 
         let title = if reviewing_drafts {
             " Review Draft Comments (Ctrl+Enter to submit, Esc to go back) "
@@ -3500,15 +3419,7 @@ impl App {
             .border_style(Style::default().fg(border_color));
 
         let inner_area = block.inner(popup_area);
-
-        // Clear background
-        let buf = frame.buffer_mut();
-        for y in popup_area.y..popup_area.y + popup_area.height {
-            for x in popup_area.x..popup_area.x + popup_area.width {
-                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(35, 35, 50)));
-            }
-        }
-
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(35, 35, 50));
         frame.render_widget(block, popup_area);
 
         if reviewing_drafts {
