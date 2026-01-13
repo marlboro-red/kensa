@@ -231,6 +231,29 @@ impl App {
             ViewMode::Unified
         };
         let highlighter = Highlighter::with_min_brightness(config.display.min_brightness);
+
+        // Initialize collapsed folders based on config
+        let (collapsed_folders, selected_tree_item) =
+            if config.navigation.collapse_folders_by_default {
+                let mut folders = HashSet::new();
+                let mut root_folders = HashSet::new();
+                for file in &files {
+                    let parts: Vec<&str> = file.path.split('/').collect();
+                    for i in 1..parts.len() {
+                        let folder_path = parts[..i].join("/");
+                        if i == 1 {
+                            root_folders.insert(folder_path.clone());
+                        }
+                        folders.insert(folder_path);
+                    }
+                }
+                // Select the first root folder alphabetically if there are folders
+                let first_folder = root_folders.into_iter().min();
+                (folders, first_folder)
+            } else {
+                (HashSet::new(), None)
+            };
+
         Self {
             screen: Screen::DiffView,
             loading: LoadingState::Idle,
@@ -266,8 +289,8 @@ impl App {
             search_mode: false,
             search_query: String::new(),
             filtered_indices: (0..file_count).collect(),
-            collapsed_folders: HashSet::new(),
-            selected_tree_item: None,
+            collapsed_folders,
+            selected_tree_item,
 
             diff_receiver: None,
             current_pr: None,
@@ -479,6 +502,40 @@ impl App {
             self.cached_flat_items = Some(flat_items);
         }
         self.cached_flat_items.clone().unwrap_or_default()
+    }
+
+    /// Collect all folder paths from the current files
+    fn collect_folder_paths(&self) -> HashSet<String> {
+        let mut folders = HashSet::new();
+        for file in &self.files {
+            let parts: Vec<&str> = file.path.split('/').collect();
+            // Build all folder paths (all but the last part which is the filename)
+            for i in 1..parts.len() {
+                let folder_path = parts[..i].join("/");
+                folders.insert(folder_path);
+            }
+        }
+        folders
+    }
+
+    /// Initialize collapsed_folders based on config setting
+    fn init_collapsed_folders(&mut self) {
+        if self.config.navigation.collapse_folders_by_default {
+            self.collapsed_folders = self.collect_folder_paths();
+            // Select the first root folder so the user can navigate
+            let mut root_folders: Vec<_> = self
+                .files
+                .iter()
+                .filter(|f| f.path.contains('/'))
+                .filter_map(|f| f.path.split('/').next())
+                .collect();
+            root_folders.sort();
+            root_folders.dedup();
+            self.selected_tree_item = root_folders.first().map(|s| s.to_string());
+        } else {
+            self.collapsed_folders.clear();
+            self.selected_tree_item = None;
+        }
     }
 
     /// Build a tree structure from the flat file list
@@ -746,8 +803,7 @@ impl App {
                             self.scroll_offset = 0;
                             self.diff_cursor = 0;
                             self.collapsed.clear();
-                            self.collapsed_folders.clear();
-                            self.selected_tree_item = None;
+                            self.init_collapsed_folders();
                             self.invalidate_tree_cache(); // Cache invalidated when files change
                             self.screen = Screen::DiffView;
                             self.loading = LoadingState::Idle;
