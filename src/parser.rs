@@ -30,7 +30,6 @@ fn parse_file(lines: &[&str]) -> Option<(DiffFile, usize)> {
 
     let mut i = 0;
     let mut path = String::new();
-    let mut old_path: Option<String> = None;
     let mut status = FileStatus::Modified;
     let mut hunks = Vec::new();
 
@@ -51,7 +50,6 @@ fn parse_file(lines: &[&str]) -> Option<(DiffFile, usize)> {
         } else if line.starts_with("deleted file mode") {
             status = FileStatus::Deleted;
         } else if line.starts_with("rename from ") {
-            old_path = Some(line[12..].to_string());
             status = FileStatus::Renamed;
         } else if line.starts_with("similarity index ") {
             status = FileStatus::Renamed;
@@ -97,7 +95,6 @@ fn parse_file(lines: &[&str]) -> Option<(DiffFile, usize)> {
     Some((
         DiffFile {
             path,
-            old_path,
             status,
             hunks,
         },
@@ -117,9 +114,9 @@ fn parse_hunk(lines: &[&str]) -> Option<(Hunk, usize)> {
     let caps = hunk_re.captures(&header)?;
 
     let old_start: u32 = caps.get(1)?.as_str().parse().ok()?;
-    let old_count: u32 = caps.get(2).map_or(1, |m| m.as_str().parse().unwrap_or(1));
+    let _old_count: u32 = caps.get(2).map_or(1, |m| m.as_str().parse().unwrap_or(1));
     let new_start: u32 = caps.get(3)?.as_str().parse().ok()?;
-    let new_count: u32 = caps.get(4).map_or(1, |m| m.as_str().parse().unwrap_or(1));
+    let _new_count: u32 = caps.get(4).map_or(1, |m| m.as_str().parse().unwrap_or(1));
 
     let mut diff_lines = Vec::new();
     let mut i = 1;
@@ -177,10 +174,6 @@ fn parse_hunk(lines: &[&str]) -> Option<(Hunk, usize)> {
     Some((
         Hunk {
             header,
-            old_start,
-            old_count,
-            new_start,
-            new_count,
             lines: diff_lines,
         },
         i,
@@ -236,6 +229,5 @@ rename to new.txt
         let files = parse_diff(diff);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].status, FileStatus::Renamed);
-        assert_eq!(files[0].old_path, Some("old.txt".to_string()));
     }
 }

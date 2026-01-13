@@ -3894,7 +3894,7 @@ impl App {
                     let base_bg = match kind {
                         LineKind::Add => ADD_BG,
                         LineKind::Del => DEL_BG,
-                        LineKind::Context | LineKind::Hunk => BG_COLOR,
+                        LineKind::Context => BG_COLOR,
                     };
                     // Blend highlight with line background
                     let bg = if is_in_selection {
@@ -3922,7 +3922,7 @@ impl App {
                             format!("{:>4}", old_ln.unwrap_or(0)),
                             "    ".to_string(),
                         ),
-                        LineKind::Context | LineKind::Hunk => (
+                        LineKind::Context => (
                             format!("{:>4}", old_ln.unwrap_or(0)),
                             format!("{:>4}", new_ln.unwrap_or(0)),
                         ),
@@ -4065,7 +4065,6 @@ impl App {
                             }),
                         ));
                     }
-                    LineKind::Hunk => {}
                 }
             }
 

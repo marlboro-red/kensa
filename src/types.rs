@@ -34,7 +34,6 @@ pub enum LineKind {
     Context,
     Add,
     Del,
-    Hunk,
 }
 
 /// A single line in a diff
@@ -50,10 +49,6 @@ pub struct DiffLine {
 #[derive(Debug, Clone)]
 pub struct Hunk {
     pub header: String,
-    pub old_start: u32,
-    pub old_count: u32,
-    pub new_start: u32,
-    pub new_count: u32,
     pub lines: Vec<DiffLine>,
 }
 
@@ -61,21 +56,11 @@ pub struct Hunk {
 #[derive(Debug, Clone)]
 pub struct DiffFile {
     pub path: String,
-    pub old_path: Option<String>,
     pub status: FileStatus,
     pub hunks: Vec<Hunk>,
 }
 
 impl DiffFile {
-    pub fn filename(&self) -> &str {
-        self.path.rsplit('/').next().unwrap_or(&self.path)
-    }
-
-    pub fn directory(&self) -> Option<&str> {
-        let path = &self.path;
-        path.rfind('/').map(|i| &path[..i])
-    }
-
     pub fn line_count(&self) -> usize {
         self.hunks.iter().map(|h| h.lines.len()).sum()
     }
@@ -98,7 +83,6 @@ pub struct ReviewPr {
     pub repo_name: String,
     pub author: String,
     pub created_at: String,
-    pub url: String,
     pub head_sha: Option<String>,  // For inline comments
 }
 
@@ -141,10 +125,6 @@ impl PendingComment {
 
     pub fn is_inline(&self) -> bool {
         self.file_path.is_some() && self.line_number.is_some()
-    }
-
-    pub fn is_multiline(&self) -> bool {
-        self.start_line.is_some()
     }
 }
 
@@ -202,11 +182,9 @@ pub struct CommentUser {
 /// A single comment in a thread (used for both review and issue comments)
 #[derive(Debug, Clone)]
 pub struct ThreadComment {
-    pub id: u64,
     pub body: String,
     pub author: String,
     pub created_at: String,
-    pub in_reply_to_id: Option<u64>,
 }
 
 /// A review comment (inline on code) from GitHub API
@@ -217,7 +195,6 @@ pub struct ReviewComment {
     pub user: CommentUser,
     pub path: String,
     pub line: Option<u32>,
-    pub start_line: Option<u32>,
     #[serde(rename = "created_at")]
     pub created_at: String,
     #[serde(default)]
@@ -240,9 +217,7 @@ pub struct CommentThread {
     pub id: u64,                      // ID of root comment
     pub file_path: Option<String>,    // None for general PR comments
     pub line: Option<u32>,            // Line number for inline comments
-    pub start_line: Option<u32>,      // For multi-line comments
     pub comments: Vec<ThreadComment>, // All comments in thread (root + replies)
-    pub is_resolved: bool,
 }
 
 impl CommentThread {

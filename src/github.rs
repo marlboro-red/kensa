@@ -106,7 +106,6 @@ struct GhSearchPrResult {
     author: GhAuthor,
     #[serde(rename = "createdAt")]
     created_at: String,
-    url: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,7 +161,6 @@ pub async fn fetch_review_prs() -> Result<Vec<ReviewPr>> {
                 repo_name,
                 author: r.author.login,
                 created_at: r.created_at,
-                url: r.url,
                 head_sha: None,  // Fetched lazily when needed
             }
         })
@@ -409,7 +407,6 @@ pub async fn fetch_my_prs() -> Result<Vec<ReviewPr>> {
                 repo_name,
                 author: r.author.login,
                 created_at: r.created_at,
-                url: r.url,
                 head_sha: None,  // Fetched lazily when needed
             }
         })
@@ -504,15 +501,11 @@ pub async fn fetch_all_comment_threads(pr: &PrInfo) -> Result<Vec<CommentThread>
             id: comment.id,
             file_path: None,
             line: None,
-            start_line: None,
             comments: vec![ThreadComment {
-                id: comment.id,
                 body: comment.body,
                 author: comment.user.login,
                 created_at: comment.created_at,
-                in_reply_to_id: None,
             }],
-            is_resolved: false,
         });
     }
 
@@ -565,11 +558,9 @@ fn group_review_comments_into_threads(comments: Vec<ReviewComment>) -> Vec<Comme
         while let Some(id) = stack.pop() {
             if let Some(comment) = by_id.get(&id) {
                 thread_comments.push(ThreadComment {
-                    id: comment.id,
                     body: comment.body.clone(),
                     author: comment.user.login.clone(),
                     created_at: comment.created_at.clone(),
-                    in_reply_to_id: comment.in_reply_to_id,
                 });
 
                 // Add children (in reverse order to maintain chronological order when popping)
@@ -589,9 +580,7 @@ fn group_review_comments_into_threads(comments: Vec<ReviewComment>) -> Vec<Comme
                 id: root_id,
                 file_path: Some(root.path.clone()),
                 line: root.line,
-                start_line: root.start_line,
                 comments: thread_comments,
-                is_resolved: false,
             });
         }
     }
