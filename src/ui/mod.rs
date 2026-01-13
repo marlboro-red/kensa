@@ -3419,13 +3419,7 @@ impl App {
                         Style::default().fg(Color::White).bg(preview_bg)
                     };
 
-                    let display_line = if *is_code {
-                        line.replace('\t', "    ")
-                    } else {
-                        line.clone()
-                    };
-
-                    buf.set_string(preview_area.x + 1, y, &display_line, style);
+                    buf.set_string(preview_area.x + 1, y, line, style);
                 }
 
                 // Show "more" indicator if there are more comments or lines
@@ -3510,9 +3504,7 @@ impl App {
             let wrapped = Self::wrap_text_with_code(&comment.body, wrap_width);
             for (line, is_code) in wrapped {
                 if is_code {
-                    // Convert tabs to spaces for proper terminal rendering
-                    let display_line = line.replace('\t', "    ");
-                    all_lines.push((format!("  │ {}", display_line), code_style));
+                    all_lines.push((format!("  │ {}", line), code_style));
                 } else {
                     all_lines.push((format!(" {}", line), body_style));
                 }
@@ -4020,11 +4012,13 @@ impl App {
 
             // For code blocks, preserve exact whitespace and don't wrap aggressively
             if in_code_block {
-                // Don't wrap code lines, just truncate if needed
-                if line.len() > width {
-                    result.push((line[..width].to_string(), true));
+                // Expand tabs first, then truncate if needed
+                let expanded = line.replace('\t', "    ");
+                let chars: Vec<char> = expanded.chars().collect();
+                if chars.len() > width {
+                    result.push((chars[..width].iter().collect(), true));
                 } else {
-                    result.push((line.to_string(), true));
+                    result.push((expanded, true));
                 }
             } else {
                 let chars: Vec<char> = line.chars().collect();
@@ -4813,7 +4807,7 @@ mod tests {
 
         assert_eq!(code_lines.len(), 3, "Should have 3 code lines");
         assert_eq!(code_lines[0].0, "    indented line", "Should preserve 4-space indent");
-        assert_eq!(code_lines[1].0, "\tline with tab", "Should preserve tab");
+        assert_eq!(code_lines[1].0, "    line with tab", "Tabs should be expanded to 4 spaces");
         assert_eq!(code_lines[2].0, "  two spaces", "Should preserve 2-space indent");
     }
 
