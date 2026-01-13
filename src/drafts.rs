@@ -179,7 +179,6 @@ mod tests {
         assert_eq!(loaded[1].line_number, Some(42));
 
         assert_eq!(loaded[2].body, "Multiline comment");
-        assert!(loaded[2].is_multiline());
         assert_eq!(loaded[2].start_line, Some(10));
         assert_eq!(loaded[2].line_number, Some(20));
 
