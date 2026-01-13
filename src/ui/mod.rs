@@ -58,8 +58,8 @@ enum TreeItem {
 const BG_COLOR: Color = Color::Rgb(22, 22, 22);
 const DEL_BG: Color = Color::Rgb(60, 30, 30);
 const ADD_BG: Color = Color::Rgb(30, 60, 30);
-const CURSOR_BG: Color = Color::Rgb(45, 45, 65);  // Highlight for cursor line
-const CURSOR_GUTTER: Color = Color::Rgb(100, 100, 180);  // Brighter gutter for cursor
+const CURSOR_BG: Color = Color::Rgb(45, 45, 65); // Highlight for cursor line
+const CURSOR_GUTTER: Color = Color::Rgb(100, 100, 180); // Brighter gutter for cursor
 
 /// Which screen is currently active
 #[derive(Clone, PartialEq, Eq)]
@@ -105,9 +105,9 @@ pub enum CommentMode {
     /// Editing a comment: (text, optional (file_path, start_line, end_line) for inline)
     Editing {
         text: String,
-        inline_context: Option<(String, u32, Option<u32>)>,  // (path, end_line, optional start_line)
+        inline_context: Option<(String, u32, Option<u32>)>, // (path, end_line, optional start_line)
     },
-    ViewingPending,         // Viewing list of pending comments
+    ViewingPending, // Viewing list of pending comments
     /// Viewing list of existing comment threads
     ViewingThreads {
         selected: usize,
@@ -126,12 +126,12 @@ pub enum CommentMode {
     },
     /// Submitting a PR review (approve/request changes/comment)
     SubmittingReview {
-        selected_action: usize,  // 0=Approve, 1=Request Changes, 2=Comment Only
-        body: String,            // Optional review comment
-        editing_body: bool,      // True when typing in comment area
-        reviewing_drafts: bool,  // True when reviewing draft comments before submission
-        selected_draft: usize,   // Which draft is selected (when reviewing_drafts)
-        editing_draft: bool,     // True when editing selected draft text
+        selected_action: usize, // 0=Approve, 1=Request Changes, 2=Comment Only
+        body: String,           // Optional review comment
+        editing_body: bool,     // True when typing in comment area
+        reviewing_drafts: bool, // True when reviewing draft comments before submission
+        selected_draft: usize,  // Which draft is selected (when reviewing_drafts)
+        editing_draft: bool,    // True when editing selected draft text
     },
 }
 
@@ -188,35 +188,35 @@ pub struct App {
     selected_tree_item: Option<String>,
 
     // For async diff loading
-    diff_receiver: Option<mpsc::Receiver<Result<(Vec<DiffFile>, Option<String>), String>>>,  // (files, head_sha)
+    diff_receiver: Option<mpsc::Receiver<Result<(Vec<DiffFile>, Option<String>), String>>>, // (files, head_sha)
     current_pr: Option<ReviewPr>,
 
     // Comment drafting
     pending_comments: Vec<PendingComment>,
     comment_mode: CommentMode,
     selected_pending_comment: usize,
-    editing_comment_index: Option<usize>,  // Index of comment being edited (None = new comment)
+    editing_comment_index: Option<usize>, // Index of comment being edited (None = new comment)
 
     // Cursor position for inline comments (line index in current file's flattened diff)
     diff_cursor: usize,
 
     // Visual selection for block comments
     visual_mode: bool,
-    selection_anchor: usize,  // Start of selection (where 'v' was pressed)
+    selection_anchor: usize, // Start of selection (where 'v' was pressed)
 
     // Help display
     help_mode: HelpMode,
 
     // Comment threads (existing comments from GitHub)
     comment_threads: Vec<CommentThread>,
-    line_to_threads: HashMap<(String, u32), Vec<usize>>,  // Quick lookup: (file_path, line) -> thread indices
+    line_to_threads: HashMap<(String, u32), Vec<usize>>, // Quick lookup: (file_path, line) -> thread indices
 
     // Async receivers for non-blocking operations
     comment_threads_receiver: Option<mpsc::Receiver<Result<Vec<CommentThread>, String>>>,
     pr_list_receiver: Option<mpsc::Receiver<Result<(Vec<ReviewPr>, Vec<ReviewPr>), String>>>,
     comment_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,
-    reply_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,  // thread_index on success
-    review_submit_receiver: Option<mpsc::Receiver<Result<(String, usize), String>>>,  // (review action, comments count) on success
+    reply_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>, // thread_index on success
+    review_submit_receiver: Option<mpsc::Receiver<Result<(String, usize), String>>>, // (review action, comments count) on success
 }
 
 impl App {
@@ -288,11 +288,13 @@ impl App {
     pub fn new_with_prs(mut review_prs: Vec<ReviewPr>, mut my_prs: Vec<ReviewPr>) -> Self {
         // Sort both lists by repo for proper grouping
         review_prs.sort_by(|a, b| {
-            a.repo_full_name().cmp(&b.repo_full_name())
+            a.repo_full_name()
+                .cmp(&b.repo_full_name())
                 .then_with(|| b.number.cmp(&a.number)) // Newer PRs first within repo
         });
         my_prs.sort_by(|a, b| {
-            a.repo_full_name().cmp(&b.repo_full_name())
+            a.repo_full_name()
+                .cmp(&b.repo_full_name())
                 .then_with(|| b.number.cmp(&a.number))
         });
 
@@ -504,7 +506,12 @@ impl App {
                     })
                     .collect();
 
-                self.insert_into_tree_nested(&mut child_map, &parts[1..], file_idx, &full_path_parts);
+                self.insert_into_tree_nested(
+                    &mut child_map,
+                    &parts[1..],
+                    file_idx,
+                    &full_path_parts,
+                );
 
                 *children = child_map.into_values().collect();
             }
@@ -549,7 +556,11 @@ impl App {
             let mut current_ancestors: Vec<bool> = ancestors_last.to_vec();
 
             match node {
-                TreeNode::Folder { name, path, children } => {
+                TreeNode::Folder {
+                    name,
+                    path,
+                    children,
+                } => {
                     items.push(TreeItem::Folder {
                         path: path.clone(),
                         name: name.clone(),
@@ -666,11 +677,13 @@ impl App {
                         Ok((mut review_prs, mut my_prs)) => {
                             // Sort by repo for proper grouping
                             review_prs.sort_by(|a, b| {
-                                a.repo_full_name().cmp(&b.repo_full_name())
+                                a.repo_full_name()
+                                    .cmp(&b.repo_full_name())
                                     .then_with(|| b.number.cmp(&a.number))
                             });
                             my_prs.sort_by(|a, b| {
-                                a.repo_full_name().cmp(&b.repo_full_name())
+                                a.repo_full_name()
+                                    .cmp(&b.repo_full_name())
                                     .then_with(|| b.number.cmp(&a.number))
                             });
 
@@ -805,7 +818,10 @@ impl App {
         }
 
         // Clear error or success on any key
-        if matches!(self.loading, LoadingState::Error(_) | LoadingState::Success(_)) {
+        if matches!(
+            self.loading,
+            LoadingState::Error(_) | LoadingState::Success(_)
+        ) {
             self.loading = LoadingState::Idle;
             return;
         }
@@ -904,7 +920,11 @@ impl App {
         }
 
         // Handle comment editing mode input
-        if let CommentMode::Editing { ref mut text, ref inline_context } = self.comment_mode {
+        if let CommentMode::Editing {
+            ref mut text,
+            ref inline_context,
+        } = self.comment_mode
+        {
             // Check for save shortcuts: Ctrl+Enter, Ctrl+S, or Alt+Enter
             let is_save = match key.code {
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => true,
@@ -923,9 +943,7 @@ impl App {
                         Some((path, line, None)) => {
                             PendingComment::new_inline(text.clone(), path, line)
                         }
-                        None => {
-                            PendingComment::new_general(text.clone())
-                        }
+                        None => PendingComment::new_general(text.clone()),
                     };
                     // If editing an existing comment, replace it; otherwise add new
                     if let Some(idx) = self.editing_comment_index {
@@ -976,7 +994,8 @@ impl App {
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
                     if !self.pending_comments.is_empty() {
-                        self.selected_pending_comment = self.selected_pending_comment
+                        self.selected_pending_comment = self
+                            .selected_pending_comment
                             .checked_sub(1)
                             .unwrap_or(self.pending_comments.len().saturating_sub(1));
                     }
@@ -986,7 +1005,8 @@ impl App {
                     if !self.pending_comments.is_empty() {
                         self.pending_comments.remove(self.selected_pending_comment);
                         if self.selected_pending_comment >= self.pending_comments.len() {
-                            self.selected_pending_comment = self.pending_comments.len().saturating_sub(1);
+                            self.selected_pending_comment =
+                                self.pending_comments.len().saturating_sub(1);
                         }
                         self.save_current_drafts();
                         if self.pending_comments.is_empty() {
@@ -1003,7 +1023,8 @@ impl App {
                     if !self.pending_comments.is_empty() {
                         let comment = &self.pending_comments[self.selected_pending_comment];
                         let inline_context = if let (Some(path), Some(line)) =
-                            (comment.file_path.clone(), comment.line_number) {
+                            (comment.file_path.clone(), comment.line_number)
+                        {
                             Some((path, line, comment.start_line))
                         } else {
                             None
@@ -1021,13 +1042,19 @@ impl App {
         }
 
         // Handle viewing threads list mode
-        if let CommentMode::ViewingThreads { ref mut selected, scroll: _ } = self.comment_mode {
+        if let CommentMode::ViewingThreads {
+            ref mut selected,
+            scroll: _,
+        } = self.comment_mode
+        {
             match key.code {
                 KeyCode::Esc => {
                     self.comment_mode = CommentMode::None;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    if !self.comment_threads.is_empty() && *selected < self.comment_threads.len() - 1 {
+                    if !self.comment_threads.is_empty()
+                        && *selected < self.comment_threads.len() - 1
+                    {
                         *selected += 1;
                     }
                 }
@@ -1057,7 +1084,9 @@ impl App {
                     // Jump to thread location in diff
                     let idx = *selected;
                     // Extract data before mutable operations
-                    let thread_info = self.comment_threads.get(idx)
+                    let thread_info = self
+                        .comment_threads
+                        .get(idx)
                         .and_then(|t| t.file_path.as_ref().map(|p| (p.clone(), t.line)));
 
                     if let Some((path, line)) = thread_info {
@@ -1079,7 +1108,12 @@ impl App {
         }
 
         // Handle viewing single thread detail mode
-        if let CommentMode::ViewingThread { index, ref mut selected, scroll: _ } = self.comment_mode {
+        if let CommentMode::ViewingThread {
+            index,
+            ref mut selected,
+            scroll: _,
+        } = self.comment_mode
+        {
             match key.code {
                 KeyCode::Esc => {
                     // Go back to thread list
@@ -1114,7 +1148,11 @@ impl App {
         }
 
         // Handle reply to thread mode
-        if let CommentMode::ReplyingToThread { index, ref mut text } = self.comment_mode {
+        if let CommentMode::ReplyingToThread {
+            index,
+            ref mut text,
+        } = self.comment_mode
+        {
             // Check for save shortcuts: Ctrl+Enter, Ctrl+S, or Alt+Enter
             let is_save = match key.code {
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => true,
@@ -1161,7 +1199,8 @@ impl App {
             ref mut reviewing_drafts,
             ref mut selected_draft,
             ref mut editing_draft,
-        } = self.comment_mode {
+        } = self.comment_mode
+        {
             // Check for submit shortcut: Ctrl+Enter or Alt+Enter
             let is_submit = match key.code {
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => true,
@@ -1178,7 +1217,11 @@ impl App {
                 }
                 // Otherwise submit the review with all drafts
                 let action = *selected_action;
-                let review_body = if body.is_empty() { None } else { Some(body.clone()) };
+                let review_body = if body.is_empty() {
+                    None
+                } else {
+                    Some(body.clone())
+                };
                 self.submit_review(action, review_body);
                 return;
             }
@@ -1222,7 +1265,9 @@ impl App {
                     }
                     KeyCode::Char('k') | KeyCode::Up => {
                         if draft_count > 0 {
-                            *selected_draft = selected_draft.checked_sub(1).unwrap_or(draft_count.saturating_sub(1));
+                            *selected_draft = selected_draft
+                                .checked_sub(1)
+                                .unwrap_or(draft_count.saturating_sub(1));
                         }
                     }
                     KeyCode::Char('e') | KeyCode::Enter => {
@@ -1235,7 +1280,9 @@ impl App {
                         // Delete selected draft
                         if draft_count > 0 && *selected_draft < draft_count {
                             self.pending_comments.remove(*selected_draft);
-                            if *selected_draft >= self.pending_comments.len() && !self.pending_comments.is_empty() {
+                            if *selected_draft >= self.pending_comments.len()
+                                && !self.pending_comments.is_empty()
+                            {
                                 *selected_draft = self.pending_comments.len() - 1;
                             }
                             self.save_current_drafts();
@@ -1271,13 +1318,13 @@ impl App {
                         self.comment_mode = CommentMode::None;
                     }
                     KeyCode::Char('1') => {
-                        *selected_action = 0;  // Approve
+                        *selected_action = 0; // Approve
                     }
                     KeyCode::Char('2') => {
-                        *selected_action = 1;  // Request Changes
+                        *selected_action = 1; // Request Changes
                     }
                     KeyCode::Char('3') => {
-                        *selected_action = 2;  // Comment Only
+                        *selected_action = 2; // Comment Only
                     }
                     KeyCode::Char('j') | KeyCode::Down => {
                         *selected_action = (*selected_action + 1) % 3;
@@ -1354,7 +1401,9 @@ impl App {
                 if self.visual_mode {
                     // Exit visual mode first
                     self.visual_mode = false;
-                } else if !self.filtered_indices.is_empty() && self.filtered_indices.len() != self.files.len() {
+                } else if !self.filtered_indices.is_empty()
+                    && self.filtered_indices.len() != self.files.len()
+                {
                     self.search_query.clear();
                     self.update_filtered_indices();
                 } else if !self.review_prs.is_empty() {
@@ -1397,9 +1446,9 @@ impl App {
                             // Multi-line selection
                             if let Some((path, start, end)) = self.get_selection_line_info() {
                                 if start == end {
-                                    Some((path, end, None))  // Single line
+                                    Some((path, end, None)) // Single line
                                 } else {
-                                    Some((path, end, Some(start)))  // Range
+                                    Some((path, end, Some(start))) // Range
                                 }
                             } else {
                                 None
@@ -1411,7 +1460,7 @@ impl App {
                     } else {
                         None
                     };
-                    self.visual_mode = false;  // Exit visual mode when commenting
+                    self.visual_mode = false; // Exit visual mode when commenting
                     self.comment_mode = CommentMode::Editing {
                         text: String::new(),
                         inline_context,
@@ -1486,14 +1535,7 @@ impl App {
     fn open_pr_url_in_browser(&self, repo: &str, number: u32) {
         // Use gh CLI to open PR in browser
         let _ = std::process::Command::new("gh")
-            .args([
-                "pr",
-                "view",
-                &number.to_string(),
-                "--repo",
-                repo,
-                "--web",
-            ])
+            .args(["pr", "view", &number.to_string(), "--repo", repo, "--web"])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1595,7 +1637,10 @@ impl App {
         // Ensure selected PR is in filtered list for current tab
         match self.pr_tab {
             PrListTab::ForReview => {
-                if !self.filtered_review_pr_indices.contains(&self.selected_review_pr) {
+                if !self
+                    .filtered_review_pr_indices
+                    .contains(&self.selected_review_pr)
+                {
                     if let Some(&first) = self.filtered_review_pr_indices.first() {
                         self.selected_review_pr = first;
                     }
@@ -1646,12 +1691,9 @@ impl App {
         let selected = self.current_selected_pr();
         let pr = pr_list[selected].clone();
         self.current_pr = Some(pr.clone());
-        self.load_current_drafts();  // Load any saved drafts for this PR
-        self.loading = LoadingState::Loading(format!(
-            "Loading {}#{} ...",
-            pr.repo_full_name(),
-            pr.number
-        ));
+        self.load_current_drafts(); // Load any saved drafts for this PR
+        self.loading =
+            LoadingState::Loading(format!("Loading {}#{} ...", pr.repo_full_name(), pr.number));
 
         // Start async diff fetch
         let pr_info = pr.to_pr_info();
@@ -1760,7 +1802,11 @@ impl App {
         // Submit in a separate thread - results processed in event_loop
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(crate::github::submit_thread_reply(&pr_info, &thread, &body_clone));
+            let result = rt.block_on(crate::github::submit_thread_reply(
+                &pr_info,
+                &thread,
+                &body_clone,
+            ));
 
             // Return thread_index on success so we can navigate back to the right thread
             let _ = tx.send(result.map(|_| thread_index).map_err(|e| e.to_string()));
@@ -1812,18 +1858,20 @@ impl App {
             } else {
                 Some(pending_comments.as_slice())
             };
-            let result = rt.block_on(
-                crate::github::submit_pr_review(
-                    &pr_info,
-                    &event_str,
-                    body_clone.as_deref(),
-                    comments_opt,
-                    head_sha.as_deref(),
-                )
-            );
+            let result = rt.block_on(crate::github::submit_pr_review(
+                &pr_info,
+                &event_str,
+                body_clone.as_deref(),
+                comments_opt,
+                head_sha.as_deref(),
+            ));
 
             // Return (event, comments_submitted) on success
-            let _ = tx.send(result.map(|count| (event_str, count)).map_err(|e| e.to_string()));
+            let _ = tx.send(
+                result
+                    .map(|count| (event_str, count))
+                    .map_err(|e| e.to_string()),
+            );
         });
     }
 
@@ -1991,7 +2039,7 @@ impl App {
 
         let mut line_idx = 0;
         for hunk in &file.hunks {
-            line_idx += 1;  // Skip hunk header
+            line_idx += 1; // Skip hunk header
 
             for diff_line in &hunk.lines {
                 if line_idx >= sel_start && line_idx <= sel_end {
@@ -2068,12 +2116,15 @@ impl App {
         }
 
         // Find current position
-        let current_pos = flat_items.iter().position(|item| {
-            match item {
-                TreeItem::File { index, .. } => self.selected_tree_item.is_none() && *index == self.selected_file,
+        let current_pos = flat_items
+            .iter()
+            .position(|item| match item {
+                TreeItem::File { index, .. } => {
+                    self.selected_tree_item.is_none() && *index == self.selected_file
+                }
                 TreeItem::Folder { path, .. } => self.selected_tree_item.as_ref() == Some(path),
-            }
-        }).unwrap_or(0);
+            })
+            .unwrap_or(0);
 
         if current_pos < flat_items.len() - 1 {
             match &flat_items[current_pos + 1] {
@@ -2096,12 +2147,15 @@ impl App {
         }
 
         // Find current position
-        let current_pos = flat_items.iter().position(|item| {
-            match item {
-                TreeItem::File { index, .. } => self.selected_tree_item.is_none() && *index == self.selected_file,
+        let current_pos = flat_items
+            .iter()
+            .position(|item| match item {
+                TreeItem::File { index, .. } => {
+                    self.selected_tree_item.is_none() && *index == self.selected_file
+                }
                 TreeItem::Folder { path, .. } => self.selected_tree_item.as_ref() == Some(path),
-            }
-        }).unwrap_or(0);
+            })
+            .unwrap_or(0);
 
         if current_pos > 0 {
             match &flat_items[current_pos - 1] {
@@ -2120,12 +2174,15 @@ impl App {
         let flat_items = self.flatten_tree(&tree);
 
         // Find current position
-        let current_pos = flat_items.iter().position(|item| {
-            match item {
-                TreeItem::File { index, .. } => self.selected_tree_item.is_none() && *index == self.selected_file,
+        let current_pos = flat_items
+            .iter()
+            .position(|item| match item {
+                TreeItem::File { index, .. } => {
+                    self.selected_tree_item.is_none() && *index == self.selected_file
+                }
                 TreeItem::Folder { path, .. } => self.selected_tree_item.as_ref() == Some(path),
-            }
-        }).unwrap_or(0);
+            })
+            .unwrap_or(0);
 
         // Find next file after current position
         for item in flat_items.iter().skip(current_pos + 1) {
@@ -2141,12 +2198,15 @@ impl App {
         let flat_items = self.flatten_tree(&tree);
 
         // Find current position
-        let current_pos = flat_items.iter().position(|item| {
-            match item {
-                TreeItem::File { index, .. } => self.selected_tree_item.is_none() && *index == self.selected_file,
+        let current_pos = flat_items
+            .iter()
+            .position(|item| match item {
+                TreeItem::File { index, .. } => {
+                    self.selected_tree_item.is_none() && *index == self.selected_file
+                }
                 TreeItem::Folder { path, .. } => self.selected_tree_item.as_ref() == Some(path),
-            }
-        }).unwrap_or(0);
+            })
+            .unwrap_or(0);
 
         // Find previous file before current position
         for item in flat_items.iter().take(current_pos).rev() {
@@ -2247,7 +2307,7 @@ impl App {
         let popup_width = 60.min(area.width.saturating_sub(4));
         let popup_height = match self.help_mode {
             HelpMode::PrList => 18,
-            HelpMode::DiffView => 28,  // Increased for thread commands
+            HelpMode::DiffView => 28, // Increased for thread commands
             HelpMode::None => return,
         };
         let popup_height = popup_height.min(area.height.saturating_sub(4));
@@ -2322,7 +2382,9 @@ impl App {
         };
 
         let buf = frame.buffer_mut();
-        let key_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+        let key_style = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
         let desc_style = Style::default().fg(Color::White);
 
         for (i, (key, desc)) in commands.iter().enumerate() {
@@ -2333,13 +2395,23 @@ impl App {
 
             // Key column (width 16)
             let key_display = format!("{:>14}  ", key);
-            buf.set_string(inner_area.x, y, &key_display, key_style.bg(Color::Rgb(30, 30, 40)));
+            buf.set_string(
+                inner_area.x,
+                y,
+                &key_display,
+                key_style.bg(Color::Rgb(30, 30, 40)),
+            );
 
             // Description
             let desc_x = inner_area.x + 16;
             let available = (inner_area.width as usize).saturating_sub(16);
             let desc_truncated: String = desc.chars().take(available).collect();
-            buf.set_string(desc_x, y, &desc_truncated, desc_style.bg(Color::Rgb(30, 30, 40)));
+            buf.set_string(
+                desc_x,
+                y,
+                &desc_truncated,
+                desc_style.bg(Color::Rgb(30, 30, 40)),
+            );
         }
     }
 
@@ -2424,29 +2496,66 @@ impl App {
             buf.set_string(x, tab_y + 1, " ", tab_bg);
         }
 
+        let name = "kensa";
+        let name_style = Style::default()
+            .fg(Color::Magenta)
+            .bg(Color::Rgb(30, 30, 40))
+            .add_modifier(Modifier::BOLD);
+        buf.set_string(area.x + 1, tab_y, name, name_style);
+
+        // Separator (account for kanji width - each kanji is 2 cells wide)
+        let sep = " │ ";
+        let sep_style = Style::default()
+            .fg(Color::DarkGray)
+            .bg(Color::Rgb(30, 30, 40));
+        let name_width: u16 = 4 + 1 + 5; // 2 kanji (2 cells each) + space + "kensa"
+        buf.set_string(area.x + 1 + name_width, tab_y, sep, sep_style);
+
+        let tabs_start = area.x + 1 + name_width + sep.len() as u16;
+
         // Tab 1: For Review
         let tab1_style = if self.pr_tab == PrListTab::ForReview {
-            Style::default().fg(Color::Cyan).bg(Color::Rgb(30, 30, 40)).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .bg(Color::Rgb(30, 30, 40))
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray).bg(Color::Rgb(30, 30, 40))
+            Style::default()
+                .fg(Color::DarkGray)
+                .bg(Color::Rgb(30, 30, 40))
         };
-        let tab1_text = format!(" [1] For Review ({}) ", self.filtered_review_pr_indices.len());
-        buf.set_string(area.x + 1, tab_y, &tab1_text, tab1_style);
+        let tab1_text = format!(
+            " [1] For Review ({}) ",
+            self.filtered_review_pr_indices.len()
+        );
+        buf.set_string(tabs_start, tab_y, &tab1_text, tab1_style);
 
         // Tab 2: My PRs
         let tab2_style = if self.pr_tab == PrListTab::MyPrs {
-            Style::default().fg(Color::Cyan).bg(Color::Rgb(30, 30, 40)).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .bg(Color::Rgb(30, 30, 40))
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray).bg(Color::Rgb(30, 30, 40))
+            Style::default()
+                .fg(Color::DarkGray)
+                .bg(Color::Rgb(30, 30, 40))
         };
         let tab2_text = format!(" [2] My PRs ({}) ", self.filtered_my_pr_indices.len());
-        let tab2_x = area.x + 1 + tab1_text.len() as u16 + 2;
+        let tab2_x = tabs_start + tab1_text.len() as u16 + 1;
         buf.set_string(tab2_x, tab_y, &tab2_text, tab2_style);
 
         // Tab hint
         let hint = "Tab: switch";
         let hint_x = area.x + area.width - hint.len() as u16 - 2;
-        buf.set_string(hint_x, tab_y, hint, Style::default().fg(Color::DarkGray).bg(Color::Rgb(30, 30, 40)));
+        buf.set_string(
+            hint_x,
+            tab_y,
+            hint,
+            Style::default()
+                .fg(Color::DarkGray)
+                .bg(Color::Rgb(30, 30, 40)),
+        );
 
         // Filter/search info on second line
         let filter_info = if self.pr_search_mode {
@@ -2462,7 +2571,14 @@ impl App {
             info
         };
         if !filter_info.is_empty() {
-            buf.set_string(area.x + 1, tab_y + 1, &filter_info, Style::default().fg(Color::Yellow).bg(Color::Rgb(30, 30, 40)));
+            buf.set_string(
+                area.x + 1,
+                tab_y + 1,
+                &filter_info,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Rgb(30, 30, 40)),
+            );
         }
 
         // Content area below tabs
@@ -2561,7 +2677,8 @@ impl App {
                     buf.set_string(x, y, " ", header_style);
                 }
 
-                let truncated_repo: String = repo.chars().take(inner_area.width as usize - 1).collect();
+                let truncated_repo: String =
+                    repo.chars().take(inner_area.width as usize - 1).collect();
                 buf.set_string(inner_area.x, y, &truncated_repo, header_style);
 
                 row += 1;
@@ -2603,7 +2720,8 @@ impl App {
             let author_age_len = author_age.chars().count();
             let title_max_width = (inner_area.x + inner_area.width)
                 .saturating_sub(x)
-                .saturating_sub(author_age_len as u16 + 2) as usize;
+                .saturating_sub(author_age_len as u16 + 2)
+                as usize;
 
             // Title (truncated)
             let title: String = pr.title.chars().take(title_max_width).collect();
@@ -2629,8 +2747,7 @@ impl App {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
                 .end_symbol(None);
-            let mut scrollbar_state =
-                ScrollbarState::new(filtered_indices.len()).position(scroll);
+            let mut scrollbar_state = ScrollbarState::new(filtered_indices.len()).position(scroll);
             frame.render_stateful_widget(
                 scrollbar,
                 content_area.inner(ratatui::layout::Margin {
@@ -2644,7 +2761,8 @@ impl App {
 
     fn render_pr_list_footer(&self, frame: &mut ratatui::Frame, area: Rect) {
         let buf = frame.buffer_mut();
-        let help = " j/k:nav  Enter:view  o:browser  f:filter  /:search  R:refresh  ?:help  q:quit ";
+        let help =
+            " j/k:nav  Enter:view  o:browser  f:filter  /:search  R:refresh  ?:help  q:quit ";
         let help_y = area.y + area.height - 1;
         let help_x = area.x + 1;
         let help_style = Style::default().fg(Color::DarkGray);
@@ -2668,25 +2786,30 @@ impl App {
             let buf = frame.buffer_mut();
 
             // First line: PR info
-            let pr_info = format!(
-                " {} #{}: {}",
-                pr.repo_full_name(),
-                pr.number,
-                pr.title
-            );
+            let pr_info = format!(" {} #{}: {}", pr.repo_full_name(), pr.number, pr.title);
             let truncated_info: String = pr_info.chars().take(area.width as usize - 1).collect();
-            let info_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+            let info_style = Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD);
 
             for x in area.x..area.x + area.width {
                 buf.set_string(x, area.y, " ", Style::default().bg(Color::Rgb(30, 30, 40)));
             }
-            buf.set_string(area.x, area.y, &truncated_info, info_style.bg(Color::Rgb(30, 30, 40)));
+            buf.set_string(
+                area.x,
+                area.y,
+                &truncated_info,
+                info_style.bg(Color::Rgb(30, 30, 40)),
+            );
 
             // Show pending comment count on the right
             if !self.pending_comments.is_empty() {
                 let comment_badge = format!(" {} draft(s) ", self.pending_comments.len());
                 let badge_x = area.x + area.width - comment_badge.len() as u16 - 1;
-                let badge_style = Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD);
+                let badge_style = Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD);
                 buf.set_string(badge_x, area.y, &comment_badge, badge_style);
             }
 
@@ -2698,10 +2821,17 @@ impl App {
             } else {
                 " q:back  c:comment  C:drafts  S:submit  ?:help "
             };
-            let hint_style = Style::default().fg(Color::Yellow).bg(Color::Rgb(30, 30, 40));
+            let hint_style = Style::default()
+                .fg(Color::Yellow)
+                .bg(Color::Rgb(30, 30, 40));
 
             for x in area.x..area.x + area.width {
-                buf.set_string(x, area.y + 1, " ", Style::default().bg(Color::Rgb(30, 30, 40)));
+                buf.set_string(
+                    x,
+                    area.y + 1,
+                    " ",
+                    Style::default().bg(Color::Rgb(30, 30, 40)),
+                );
             }
             buf.set_string(area.x, area.y + 1, nav_hint, hint_style);
 
@@ -2731,7 +2861,10 @@ impl App {
     fn render_comment_overlay(&self, frame: &mut ratatui::Frame, area: Rect) {
         match &self.comment_mode {
             CommentMode::None => {}
-            CommentMode::Editing { text, inline_context } => {
+            CommentMode::Editing {
+                text,
+                inline_context,
+            } => {
                 self.render_comment_input(frame, area, text, inline_context.as_ref());
             }
             CommentMode::ViewingPending => {
@@ -2740,7 +2873,11 @@ impl App {
             CommentMode::ViewingThreads { selected, scroll } => {
                 self.render_threads_list(frame, area, *selected, *scroll);
             }
-            CommentMode::ViewingThread { index, selected, scroll } => {
+            CommentMode::ViewingThread {
+                index,
+                selected,
+                scroll,
+            } => {
                 self.render_thread_detail(frame, area, *index, *selected, *scroll);
             }
             CommentMode::ReplyingToThread { index, text } => {
@@ -2748,13 +2885,35 @@ impl App {
                 self.render_thread_detail(frame, area, *index, 0, 0);
                 self.render_reply_input(frame, area, text);
             }
-            CommentMode::SubmittingReview { selected_action, body, editing_body, reviewing_drafts, selected_draft, editing_draft } => {
-                self.render_review_modal(frame, area, *selected_action, body, *editing_body, *reviewing_drafts, *selected_draft, *editing_draft);
+            CommentMode::SubmittingReview {
+                selected_action,
+                body,
+                editing_body,
+                reviewing_drafts,
+                selected_draft,
+                editing_draft,
+            } => {
+                self.render_review_modal(
+                    frame,
+                    area,
+                    *selected_action,
+                    body,
+                    *editing_body,
+                    *reviewing_drafts,
+                    *selected_draft,
+                    *editing_draft,
+                );
             }
         }
     }
 
-    fn render_comment_input(&self, frame: &mut ratatui::Frame, area: Rect, text: &str, inline_context: Option<&(String, u32, Option<u32>)>) {
+    fn render_comment_input(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: Rect,
+        text: &str,
+        inline_context: Option<&(String, u32, Option<u32>)>,
+    ) {
         // Create a centered popup for comment input
         let popup_width = (area.width * 2 / 3).min(80);
         let popup_height = 12;
@@ -2770,14 +2929,32 @@ impl App {
 
         let title = match inline_context {
             Some((path, end_line, Some(start_line))) => {
-                format!(" Comment on {}:{}-{} (Ctrl+S to save, Esc to cancel) ", path, start_line, end_line)
+                let suffix = " (Ctrl+S, Esc) ";
+                let line_info = format!(":{}-{}", start_line, end_line);
+                let prefix = " Comment on ";
+                let max_path_len = (popup_width as usize)
+                    .saturating_sub(prefix.len() + line_info.len() + suffix.len() + 2);
+                let display_path = if path.len() > max_path_len {
+                    format!("...{}", &path[path.len().saturating_sub(max_path_len.saturating_sub(3))..])
+                } else {
+                    path.clone()
+                };
+                format!("{}{}{}{}", prefix, display_path, line_info, suffix)
             }
             Some((path, line, None)) => {
-                format!(" Comment on {}:{} (Ctrl+S to save, Esc to cancel) ", path, line)
+                let suffix = " (Ctrl+S, Esc) ";
+                let line_info = format!(":{}", line);
+                let prefix = " Comment on ";
+                let max_path_len = (popup_width as usize)
+                    .saturating_sub(prefix.len() + line_info.len() + suffix.len() + 2);
+                let display_path = if path.len() > max_path_len {
+                    format!("...{}", &path[path.len().saturating_sub(max_path_len.saturating_sub(3))..])
+                } else {
+                    path.clone()
+                };
+                format!("{}{}{}{}", prefix, display_path, line_info, suffix)
             }
-            None => {
-                " New Comment (Ctrl+S to save, Esc to cancel) ".to_string()
-            }
+            None => " New Comment (Ctrl+S, Esc) ".to_string(),
         };
 
         let block = Block::default()
@@ -2879,7 +3056,9 @@ impl App {
                 inner_area.x,
                 inner_area.y,
                 "No pending comments",
-                Style::default().fg(Color::DarkGray).bg(Color::Rgb(40, 40, 50)),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .bg(Color::Rgb(40, 40, 50)),
             );
             return;
         }
@@ -2909,7 +3088,7 @@ impl App {
                 let line = comment.line_number.unwrap();
                 // Shorten path if too long
                 let short_path: String = if path.len() > 20 {
-                    format!("...{}", &path[path.len()-17..])
+                    format!("...{}", &path[path.len() - 17..])
                 } else {
                     path.clone()
                 };
@@ -2924,8 +3103,10 @@ impl App {
             buf.set_string(inner_area.x, y, &type_indicator, style.fg(Color::Cyan));
 
             // Comment preview (first line, truncated)
-            let available_width = (inner_area.width as usize).saturating_sub(type_indicator.len() + 2);
-            let preview: String = comment.body
+            let available_width =
+                (inner_area.width as usize).saturating_sub(type_indicator.len() + 2);
+            let preview: String = comment
+                .body
                 .lines()
                 .next()
                 .unwrap_or("")
@@ -2953,7 +3134,13 @@ impl App {
         }
     }
 
-    fn render_threads_list(&self, frame: &mut ratatui::Frame, area: Rect, selected: usize, scroll: usize) {
+    fn render_threads_list(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: Rect,
+        selected: usize,
+        scroll: usize,
+    ) {
         let popup_width = (area.width * 3 / 4).min(100);
         let popup_height = (area.height * 2 / 3).min(25);
         let popup_x = area.x + (area.width - popup_width) / 2;
@@ -2993,7 +3180,9 @@ impl App {
                 inner_area.x,
                 inner_area.y,
                 "No comment threads on this PR",
-                Style::default().fg(Color::DarkGray).bg(Color::Rgb(35, 35, 45)),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .bg(Color::Rgb(35, 35, 45)),
             );
             return;
         }
@@ -3001,7 +3190,8 @@ impl App {
         let buf = frame.buffer_mut();
 
         // Render thread list
-        for (row, (idx, thread)) in self.comment_threads
+        for (row, (idx, thread)) in self
+            .comment_threads
             .iter()
             .enumerate()
             .skip(scroll)
@@ -3025,7 +3215,7 @@ impl App {
             // Thread location
             let location = if let Some(path) = &thread.file_path {
                 let short_path = if path.len() > 25 {
-                    format!("...{}", &path[path.len()-22..])
+                    format!("...{}", &path[path.len() - 22..])
                 } else {
                     path.clone()
                 };
@@ -3054,13 +3244,21 @@ impl App {
 
             // Preview of first comment
             let preview_x = author_x + author.len() as u16 + 1;
-            let available = (inner_area.width as usize).saturating_sub((preview_x - inner_area.x) as usize);
+            let available =
+                (inner_area.width as usize).saturating_sub((preview_x - inner_area.x) as usize);
             let preview = thread.preview(available);
             buf.set_string(preview_x, y, &preview, style.fg(Color::Gray));
         }
     }
 
-    fn render_thread_detail(&self, frame: &mut ratatui::Frame, area: Rect, thread_idx: usize, selected: usize, scroll: usize) {
+    fn render_thread_detail(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: Rect,
+        thread_idx: usize,
+        selected: usize,
+        scroll: usize,
+    ) {
         let Some(thread) = self.comment_threads.get(thread_idx) else {
             return;
         };
@@ -3129,12 +3327,16 @@ impl App {
                 inner_area.x,
                 y,
                 &header,
-                Style::default().fg(Color::Green).bg(bg).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
             );
             y += 1;
 
             // Comment body (word-wrapped)
-            let wrapped = Self::wrap_text(&comment.body, (inner_area.width as usize).saturating_sub(2));
+            let wrapped =
+                Self::wrap_text(&comment.body, (inner_area.width as usize).saturating_sub(2));
             for line in wrapped {
                 if y >= inner_area.y + inner_area.height {
                     break;
@@ -3217,7 +3419,17 @@ impl App {
         }
     }
 
-    fn render_review_modal(&self, frame: &mut ratatui::Frame, area: Rect, selected_action: usize, body: &str, editing_body: bool, reviewing_drafts: bool, selected_draft: usize, editing_draft: bool) {
+    fn render_review_modal(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: Rect,
+        selected_action: usize,
+        body: &str,
+        editing_body: bool,
+        reviewing_drafts: bool,
+        selected_draft: usize,
+        editing_draft: bool,
+    ) {
         let popup_width = (area.width * 2 / 3).min(80);
         let popup_height = if reviewing_drafts { 22 } else { 20 };
         let popup_x = area.x + (area.width - popup_width) / 2;
@@ -3268,11 +3480,26 @@ impl App {
             self.render_draft_review(frame, inner_area, selected_draft, editing_draft);
         } else {
             // Render main review modal
-            self.render_review_main(frame, inner_area, selected_action, body, editing_body, popup_area);
+            self.render_review_main(
+                frame,
+                inner_area,
+                selected_action,
+                body,
+                editing_body,
+                popup_area,
+            );
         }
     }
 
-    fn render_review_main(&self, frame: &mut ratatui::Frame, inner_area: Rect, selected_action: usize, body: &str, editing_body: bool, popup_area: Rect) {
+    fn render_review_main(
+        &self,
+        frame: &mut ratatui::Frame,
+        inner_area: Rect,
+        selected_action: usize,
+        body: &str,
+        editing_body: bool,
+        popup_area: Rect,
+    ) {
         // Render action options
         let actions = [
             ("1", "Approve", Color::Green),
@@ -3300,12 +3527,7 @@ impl App {
             };
 
             buf.set_string(inner_area.x, y, prefix, style);
-            buf.set_string(
-                inner_area.x + 2,
-                y,
-                format!("[{}] {}", key, label),
-                style,
-            );
+            buf.set_string(inner_area.x + 2, y, format!("[{}] {}", key, label), style);
         }
 
         // Separator and comment label
@@ -3389,10 +3611,7 @@ impl App {
         let drafts_y = body_start_y + body_height + 1;
         let draft_count = self.pending_comments.len();
         if draft_count > 0 {
-            let drafts_text = format!(
-                "Draft comments: {} (press 'd' to review)",
-                draft_count
-            );
+            let drafts_text = format!("Draft comments: {} (press 'd' to review)", draft_count);
             buf.set_string(
                 inner_area.x,
                 drafts_y,
@@ -3427,7 +3646,13 @@ impl App {
         }
     }
 
-    fn render_draft_review(&self, frame: &mut ratatui::Frame, inner_area: Rect, selected_draft: usize, editing_draft: bool) {
+    fn render_draft_review(
+        &self,
+        frame: &mut ratatui::Frame,
+        inner_area: Rect,
+        selected_draft: usize,
+        editing_draft: bool,
+    ) {
         let buf = frame.buffer_mut();
         let draft_count = self.pending_comments.len();
 
@@ -3437,7 +3662,9 @@ impl App {
             inner_area.x,
             inner_area.y,
             &header,
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         );
 
         if draft_count == 0 {
@@ -3469,7 +3696,13 @@ impl App {
         };
 
         // Render visible drafts
-        for (i, draft) in self.pending_comments.iter().enumerate().skip(scroll_offset).take(visible_drafts) {
+        for (i, draft) in self
+            .pending_comments
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(visible_drafts)
+        {
             let y = list_start_y + (i - scroll_offset) as u16;
             let is_selected = i == selected_draft;
 
@@ -3488,18 +3721,32 @@ impl App {
             };
 
             // Format: "> [file:line] first line of comment..."
-            let comment_preview: String = draft.body.lines().next().unwrap_or("").chars().take(40).collect();
+            let comment_preview: String = draft
+                .body
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(40)
+                .collect();
             let display = format!("[{}] {}", location, comment_preview);
 
             let style = if is_selected && editing_draft {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
             } else if is_selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
 
-            let truncated: String = display.chars().take(inner_area.width as usize - 4).collect();
+            let truncated: String = display
+                .chars()
+                .take(inner_area.width as usize - 4)
+                .collect();
             buf.set_string(inner_area.x, y, prefix, style);
             buf.set_string(inner_area.x + 2, y, &truncated, style);
         }
@@ -3546,7 +3793,12 @@ impl App {
                     break;
                 }
                 let truncated: String = line.chars().take(inner_area.width as usize - 2).collect();
-                buf.set_string(inner_area.x + 1, y, &truncated, Style::default().fg(Color::White).bg(edit_bg));
+                buf.set_string(
+                    inner_area.x + 1,
+                    y,
+                    &truncated,
+                    Style::default().fg(Color::White).bg(edit_bg),
+                );
             }
         }
 
@@ -3617,7 +3869,12 @@ impl App {
         let title = if self.search_mode {
             format!(" /{}_ ", self.search_query)
         } else if !self.search_query.is_empty() {
-            format!(" Files ({}/{}) [{}] ", self.filtered_indices.len(), self.files.len(), self.search_query)
+            format!(
+                " Files ({}/{}) [{}] ",
+                self.filtered_indices.len(),
+                self.files.len(),
+                self.search_query
+            )
         } else {
             format!(" Files ({}) ", self.files.len())
         };
@@ -3649,12 +3906,13 @@ impl App {
         let visible_height = inner_area.height as usize;
 
         // Find position of selected item in flattened list
-        let selected_pos = flat_items.iter().position(|item| {
-            match item {
+        let selected_pos = flat_items
+            .iter()
+            .position(|item| match item {
                 TreeItem::File { index, .. } => *index == self.selected_file,
                 TreeItem::Folder { path, .. } => self.selected_tree_item.as_ref() == Some(path),
-            }
-        }).unwrap_or(0);
+            })
+            .unwrap_or(0);
 
         // Auto-scroll to keep selected item visible
         let tree_scroll = if selected_pos < self.tree_scroll {
@@ -3667,11 +3925,22 @@ impl App {
 
         let buf = frame.buffer_mut();
 
-        for (row_idx, item) in flat_items.iter().skip(tree_scroll).take(visible_height).enumerate() {
+        for (row_idx, item) in flat_items
+            .iter()
+            .skip(tree_scroll)
+            .take(visible_height)
+            .enumerate()
+        {
             let y = inner_area.y + row_idx as u16;
 
             match item {
-                TreeItem::Folder { path, name, depth, is_last, ancestors_last } => {
+                TreeItem::Folder {
+                    path,
+                    name,
+                    depth,
+                    is_last,
+                    ancestors_last,
+                } => {
                     let is_selected = self.selected_tree_item.as_ref() == Some(path);
                     let is_collapsed = self.collapsed_folders.contains(path);
 
@@ -3679,7 +3948,9 @@ impl App {
                     let folder_icon = if is_collapsed { "+" } else { "-" };
 
                     let style = if is_selected {
-                        Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .bg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
                     };
@@ -3700,18 +3971,29 @@ impl App {
 
                     // Draw folder name
                     let display_name = format!(" {}/", name);
-                    let available_width = (inner_area.x + inner_area.width).saturating_sub(x) as usize;
-                    let truncated_name: String = display_name.chars().take(available_width).collect();
+                    let available_width =
+                        (inner_area.x + inner_area.width).saturating_sub(x) as usize;
+                    let truncated_name: String =
+                        display_name.chars().take(available_width).collect();
                     buf.set_string(x, y, &truncated_name, style.fg(Color::Yellow));
                 }
-                TreeItem::File { index, name, depth, is_last, ancestors_last } => {
+                TreeItem::File {
+                    index,
+                    name,
+                    depth,
+                    is_last,
+                    ancestors_last,
+                } => {
                     let file = &self.files[*index];
-                    let is_selected = *index == self.selected_file && self.selected_tree_item.is_none();
+                    let is_selected =
+                        *index == self.selected_file && self.selected_tree_item.is_none();
 
                     let prefix = self.get_tree_prefix(*depth, *is_last, ancestors_last);
 
                     let style = if is_selected {
-                        Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .bg(Color::DarkGray)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
                     };
@@ -3732,7 +4014,8 @@ impl App {
                     x += badge.chars().count() as u16;
 
                     // Draw file name
-                    let available_width = (inner_area.x + inner_area.width).saturating_sub(x) as usize;
+                    let available_width =
+                        (inner_area.x + inner_area.width).saturating_sub(x) as usize;
                     let truncated_name: String = name.chars().take(available_width).collect();
                     buf.set_string(x, y, &truncated_name, style);
                 }
@@ -3744,8 +4027,7 @@ impl App {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
                 .end_symbol(None);
-            let mut scrollbar_state = ScrollbarState::new(flat_items.len())
-                .position(tree_scroll);
+            let mut scrollbar_state = ScrollbarState::new(flat_items.len()).position(tree_scroll);
             frame.render_stateful_widget(
                 scrollbar,
                 area.inner(ratatui::layout::Margin {
@@ -3849,14 +4131,17 @@ impl App {
             let y = area.y + row_idx as u16;
             let line_idx = scroll + row_idx;
             let (sel_start, sel_end) = self.get_selection_range();
-            let is_in_selection = self.visual_mode && self.focus == Focus::Diff
-                && line_idx >= sel_start && line_idx <= sel_end;
-            let is_cursor_line = self.focus == Focus::Diff && line_idx == self.diff_cursor && !self.visual_mode;
+            let is_in_selection = self.visual_mode
+                && self.focus == Focus::Diff
+                && line_idx >= sel_start
+                && line_idx <= sel_end;
+            let is_cursor_line =
+                self.focus == Focus::Diff && line_idx == self.diff_cursor && !self.visual_mode;
 
             match line {
                 DiffDisplayLine::Hunk(header) => {
                     let bg = if is_in_selection {
-                        Color::Rgb(60, 60, 90)  // Selection highlight
+                        Color::Rgb(60, 60, 90) // Selection highlight
                     } else if is_cursor_line {
                         CURSOR_BG
                     } else {
@@ -3864,9 +4149,16 @@ impl App {
                     };
 
                     // Cursor marker
-                    let cursor_marker = if is_cursor_line || is_in_selection { "▶" } else { " " };
+                    let cursor_marker = if is_cursor_line || is_in_selection {
+                        "▶"
+                    } else {
+                        " "
+                    };
                     let marker_style = if is_cursor_line {
-                        Style::default().fg(Color::Yellow).bg(CURSOR_GUTTER).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .bg(CURSOR_GUTTER)
+                            .add_modifier(Modifier::BOLD)
                     } else if is_in_selection {
                         Style::default().fg(Color::Cyan).bg(Color::Rgb(60, 60, 90))
                     } else {
@@ -3899,9 +4191,9 @@ impl App {
                     // Blend highlight with line background
                     let bg = if is_in_selection {
                         match kind {
-                            LineKind::Add => Color::Rgb(50, 90, 70),  // Green-ish selection
-                            LineKind::Del => Color::Rgb(90, 50, 70),  // Red-ish selection
-                            _ => Color::Rgb(60, 60, 90),  // Blue-ish selection
+                            LineKind::Add => Color::Rgb(50, 90, 70), // Green-ish selection
+                            LineKind::Del => Color::Rgb(90, 50, 70), // Red-ish selection
+                            _ => Color::Rgb(60, 60, 90),             // Blue-ish selection
                         }
                     } else if is_cursor_line {
                         match kind {
@@ -3914,14 +4206,12 @@ impl App {
                     };
 
                     let (old_str, new_str) = match kind {
-                        LineKind::Add => (
-                            "    ".to_string(),
-                            format!("{:>4}", new_ln.unwrap_or(0)),
-                        ),
-                        LineKind::Del => (
-                            format!("{:>4}", old_ln.unwrap_or(0)),
-                            "    ".to_string(),
-                        ),
+                        LineKind::Add => {
+                            ("    ".to_string(), format!("{:>4}", new_ln.unwrap_or(0)))
+                        }
+                        LineKind::Del => {
+                            (format!("{:>4}", old_ln.unwrap_or(0)), "    ".to_string())
+                        }
                         LineKind::Context => (
                             format!("{:>4}", old_ln.unwrap_or(0)),
                             format!("{:>4}", new_ln.unwrap_or(0)),
@@ -3934,9 +4224,16 @@ impl App {
                     }
 
                     // Cursor marker for current line
-                    let cursor_marker = if is_cursor_line || is_in_selection { "▶" } else { " " };
+                    let cursor_marker = if is_cursor_line || is_in_selection {
+                        "▶"
+                    } else {
+                        " "
+                    };
                     let marker_style = if is_cursor_line {
-                        Style::default().fg(Color::Yellow).bg(CURSOR_GUTTER).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .bg(CURSOR_GUTTER)
+                            .add_modifier(Modifier::BOLD)
                     } else if is_in_selection {
                         Style::default().fg(Color::Cyan).bg(Color::Rgb(60, 60, 90))
                     } else {
@@ -3945,11 +4242,14 @@ impl App {
                     buf.set_string(area.x, y, cursor_marker, marker_style);
 
                     let gutter = format!("{} {} ", old_str, new_str);
-                    let gutter_width = gutter.len() + 1;  // +1 for cursor marker
+                    let gutter_width = gutter.len() + 1; // +1 for cursor marker
 
                     // Render line numbers with special style for cursor line
                     let gutter_style = if is_cursor_line {
-                        Style::default().fg(Color::White).bg(CURSOR_GUTTER).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::White)
+                            .bg(CURSOR_GUTTER)
+                            .add_modifier(Modifier::BOLD)
                     } else if is_in_selection {
                         Style::default().fg(Color::White).bg(Color::Rgb(60, 60, 90))
                     } else {
@@ -3959,10 +4259,18 @@ impl App {
 
                     // Comment thread indicator
                     let indicator_x = area.x + gutter_width as u16;
-                    let has_comment = new_ln.map(|ln| self.has_threads_at_line(&file.path, ln)).unwrap_or(false);
+                    let has_comment = new_ln
+                        .map(|ln| self.has_threads_at_line(&file.path, ln))
+                        .unwrap_or(false);
                     if has_comment {
-                        let count = new_ln.map(|ln| self.thread_count_at_line(&file.path, ln)).unwrap_or(0);
-                        let indicator = if count > 1 { format!("{}", count) } else { "C".to_string() };
+                        let count = new_ln
+                            .map(|ln| self.thread_count_at_line(&file.path, ln))
+                            .unwrap_or(0);
+                        let indicator = if count > 1 {
+                            format!("{}", count)
+                        } else {
+                            "C".to_string()
+                        };
                         let indicator_style = Style::default()
                             .fg(Color::Yellow)
                             .bg(bg)
@@ -3970,7 +4278,7 @@ impl App {
                         buf.set_string(indicator_x, y, &indicator, indicator_style);
                     }
 
-                    let content_start_x = area.x + gutter_width as u16 + 2;  // +2 for indicator space
+                    let content_start_x = area.x + gutter_width as u16 + 2; // +2 for indicator space
                     let max_x = area.x + area.width;
 
                     // First render raw content as fallback (in case spans don't cover everything)
@@ -4174,7 +4482,11 @@ impl App {
         let indicator_x = x + gutter_len;
         if self.has_threads_at_line(path, ln) {
             let count = self.thread_count_at_line(path, ln);
-            let indicator = if count > 1 { format!("{}", count) } else { "C".to_string() };
+            let indicator = if count > 1 {
+                format!("{}", count)
+            } else {
+                "C".to_string()
+            };
             let indicator_style = Style::default()
                 .fg(Color::Yellow)
                 .bg(bg)
@@ -4182,7 +4494,7 @@ impl App {
             buf.set_string(indicator_x, y, &indicator, indicator_style);
         }
 
-        let content_start_x = x + gutter_len + 2;  // +2 for indicator space
+        let content_start_x = x + gutter_len + 2; // +2 for indicator space
 
         // First render raw content as fallback (in case spans don't cover everything)
         let default_style = Style::default().fg(Color::White).bg(bg);
