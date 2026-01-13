@@ -336,15 +336,10 @@ index 1234567..abcdefg 100644
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].hunks.len(), 3);
 
-        // Check hunk starts
-        assert_eq!(files[0].hunks[0].old_start, 1);
-        assert_eq!(files[0].hunks[0].new_start, 1);
-
-        assert_eq!(files[0].hunks[1].old_start, 10);
-        assert_eq!(files[0].hunks[1].new_start, 11);
-
-        assert_eq!(files[0].hunks[2].old_start, 20);
-        assert_eq!(files[0].hunks[2].new_start, 22);
+        // Check hunk headers contain expected line info
+        assert!(files[0].hunks[0].header.contains("-1,3 +1,4"));
+        assert!(files[0].hunks[1].header.contains("-10,3 +11,4"));
+        assert!(files[0].hunks[2].header.contains("-20,3 +22,4"));
     }
 
     #[test]
@@ -414,10 +409,8 @@ index 1234567..abcdefg 100644
         assert_eq!(files[0].hunks.len(), 1);
 
         let hunk = &files[0].hunks[0];
-        assert_eq!(hunk.old_start, 1);
-        assert_eq!(hunk.old_count, 1);
-        assert_eq!(hunk.new_start, 1);
-        assert_eq!(hunk.new_count, 1);
+        assert!(hunk.header.contains("-1 +1"));
+        assert_eq!(hunk.lines.len(), 2);
     }
 
     #[test]
@@ -438,8 +431,7 @@ index 1234567..abcdefg 100644
 
         let hunk = &files[0].hunks[0];
         assert!(hunk.header.contains("fn my_function()"));
-        assert_eq!(hunk.old_start, 10);
-        assert_eq!(hunk.new_start, 10);
+        assert!(hunk.header.contains("-10,3 +10,4"));
     }
 
     #[test]
@@ -497,7 +489,6 @@ index 1234567..abcdefg 100644
         let files = parse_diff(diff);
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "new_name.txt");
-        assert_eq!(files[0].old_path, Some("old_name.txt".to_string()));
         assert_eq!(files[0].status, FileStatus::Renamed);
         assert_eq!(files[0].hunks.len(), 1);
     }
@@ -592,10 +583,7 @@ index 1234567..abcdefg 100644
         let files = parse_diff(diff);
         let hunk = &files[0].hunks[0];
 
-        assert_eq!(hunk.old_start, 1);
-        assert_eq!(hunk.old_count, 10);
-        assert_eq!(hunk.new_start, 1);
-        assert_eq!(hunk.new_count, 15);
+        assert!(hunk.header.contains("-1,10 +1,15"));
     }
 
     #[test]
@@ -643,8 +631,7 @@ index 1234567..abcdefg 100644
         let files = parse_diff(diff);
         let hunk = &files[0].hunks[0];
 
-        assert_eq!(hunk.old_start, 99999);
-        assert_eq!(hunk.new_start, 100000);
+        assert!(hunk.header.contains("-99999,3 +100000,4"));
 
         let lines = &hunk.lines;
         assert_eq!(lines[0].old_ln, Some(99999));

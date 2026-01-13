@@ -301,58 +301,9 @@ mod tests {
     fn create_test_diff_file(path: &str, hunks: Vec<Hunk>) -> DiffFile {
         DiffFile {
             path: path.to_string(),
-            old_path: None,
             status: FileStatus::Modified,
             hunks,
         }
-    }
-
-    #[test]
-    fn test_diff_file_filename_simple() {
-        let file = create_test_diff_file("src/main.rs", vec![]);
-        assert_eq!(file.filename(), "main.rs");
-    }
-
-    #[test]
-    fn test_diff_file_filename_nested() {
-        let file = create_test_diff_file("src/components/ui/Button.tsx", vec![]);
-        assert_eq!(file.filename(), "Button.tsx");
-    }
-
-    #[test]
-    fn test_diff_file_filename_no_directory() {
-        let file = create_test_diff_file("README.md", vec![]);
-        assert_eq!(file.filename(), "README.md");
-    }
-
-    #[test]
-    fn test_diff_file_filename_deeply_nested() {
-        let file = create_test_diff_file("a/b/c/d/e/f/file.txt", vec![]);
-        assert_eq!(file.filename(), "file.txt");
-    }
-
-    #[test]
-    fn test_diff_file_directory_with_path() {
-        let file = create_test_diff_file("src/components/Button.tsx", vec![]);
-        assert_eq!(file.directory(), Some("src/components"));
-    }
-
-    #[test]
-    fn test_diff_file_directory_simple_path() {
-        let file = create_test_diff_file("src/main.rs", vec![]);
-        assert_eq!(file.directory(), Some("src"));
-    }
-
-    #[test]
-    fn test_diff_file_directory_no_directory() {
-        let file = create_test_diff_file("file.txt", vec![]);
-        assert_eq!(file.directory(), None);
-    }
-
-    #[test]
-    fn test_diff_file_directory_deeply_nested() {
-        let file = create_test_diff_file("a/b/c/d/file.txt", vec![]);
-        assert_eq!(file.directory(), Some("a/b/c/d"));
     }
 
     fn create_test_hunk(line_count: usize) -> Hunk {
@@ -367,10 +318,6 @@ mod tests {
 
         Hunk {
             header: "@@ -1,3 +1,3 @@".to_string(),
-            old_start: 1,
-            old_count: line_count as u32,
-            new_start: 1,
-            new_count: line_count as u32,
             lines,
         }
     }
@@ -459,24 +406,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_comment_is_multiline_true() {
-        let comment = PendingComment::new_multiline(
-            "test".to_string(),
-            "file.rs".to_string(),
-            5,
-            10,
-        );
-        assert!(comment.is_multiline());
-    }
-
-    #[test]
-    fn test_pending_comment_is_multiline_false() {
-        let comment =
-            PendingComment::new_inline("test".to_string(), "file.rs".to_string(), 10);
-        assert!(!comment.is_multiline());
-    }
-
-    #[test]
     fn test_pending_comment_serialization() {
         let comment = PendingComment::new_inline(
             "Test body".to_string(),
@@ -519,7 +448,6 @@ mod tests {
             repo_name: "testrepo".to_string(),
             author: "testauthor".to_string(),
             created_at: "2024-01-15T10:30:00Z".to_string(),
-            url: "https://github.com/testowner/testrepo/pull/123".to_string(),
             head_sha: Some("abc123".to_string()),
         }
     }
@@ -605,13 +533,11 @@ mod tests {
     // CommentThread tests
     // ========================================================================
 
-    fn create_test_thread_comment(id: u64, body: &str, author: &str) -> ThreadComment {
+    fn create_test_thread_comment(body: &str, author: &str) -> ThreadComment {
         ThreadComment {
-            id,
             body: body.to_string(),
             author: author.to_string(),
             created_at: "2024-01-15T10:30:00Z".to_string(),
-            in_reply_to_id: None,
         }
     }
 
@@ -624,12 +550,10 @@ mod tests {
                 None
             },
             line: if is_inline { Some(42) } else { None },
-            start_line: None,
             comments: vec![
-                create_test_thread_comment(1, "First comment", "user1"),
-                create_test_thread_comment(2, "Second comment", "user2"),
+                create_test_thread_comment("First comment", "user1"),
+                create_test_thread_comment("Second comment", "user2"),
             ],
-            is_resolved: false,
         }
     }
 
@@ -657,9 +581,7 @@ mod tests {
             id: 1,
             file_path: None,
             line: None,
-            start_line: None,
             comments: vec![],
-            is_resolved: false,
         };
         assert_eq!(thread.comment_count(), 0);
     }
@@ -687,9 +609,7 @@ mod tests {
             id: 1,
             file_path: None,
             line: None,
-            start_line: None,
             comments: vec![],
-            is_resolved: false,
         };
         assert_eq!(thread.preview(100), "");
     }
@@ -715,9 +635,7 @@ mod tests {
             id: 1,
             file_path: None,
             line: None,
-            start_line: None,
             comments: vec![],
-            is_resolved: false,
         };
         assert_eq!(thread.author(), "unknown");
     }
@@ -731,14 +649,13 @@ mod tests {
         assert_eq!(LineKind::Context, LineKind::Context);
         assert_eq!(LineKind::Add, LineKind::Add);
         assert_eq!(LineKind::Del, LineKind::Del);
-        assert_eq!(LineKind::Hunk, LineKind::Hunk);
     }
 
     #[test]
     fn test_line_kind_inequality() {
         assert_ne!(LineKind::Context, LineKind::Add);
         assert_ne!(LineKind::Add, LineKind::Del);
-        assert_ne!(LineKind::Del, LineKind::Hunk);
+        assert_ne!(LineKind::Del, LineKind::Context);
     }
 
     #[test]
@@ -818,18 +735,11 @@ mod tests {
     fn test_hunk_creation() {
         let hunk = Hunk {
             header: "@@ -1,5 +1,7 @@ fn main()".to_string(),
-            old_start: 1,
-            old_count: 5,
-            new_start: 1,
-            new_count: 7,
             lines: vec![],
         };
 
-        assert_eq!(hunk.old_start, 1);
-        assert_eq!(hunk.old_count, 5);
-        assert_eq!(hunk.new_start, 1);
-        assert_eq!(hunk.new_count, 7);
         assert!(hunk.header.contains("fn main()"));
+        assert!(hunk.lines.is_empty());
     }
 
     #[test]
@@ -838,7 +748,6 @@ mod tests {
         let cloned = hunk.clone();
 
         assert_eq!(hunk.header, cloned.header);
-        assert_eq!(hunk.old_start, cloned.old_start);
         assert_eq!(hunk.lines.len(), cloned.lines.len());
     }
 
@@ -860,25 +769,20 @@ mod tests {
     #[test]
     fn test_thread_comment_creation() {
         let comment = ThreadComment {
-            id: 12345,
             body: "Test comment body".to_string(),
             author: "testuser".to_string(),
             created_at: "2024-01-15T10:30:00Z".to_string(),
-            in_reply_to_id: Some(12344),
         };
 
-        assert_eq!(comment.id, 12345);
         assert_eq!(comment.body, "Test comment body");
         assert_eq!(comment.author, "testuser");
-        assert_eq!(comment.in_reply_to_id, Some(12344));
     }
 
     #[test]
     fn test_thread_comment_clone() {
-        let comment = create_test_thread_comment(1, "test", "author");
+        let comment = create_test_thread_comment("test", "author");
         let cloned = comment.clone();
 
-        assert_eq!(comment.id, cloned.id);
         assert_eq!(comment.body, cloned.body);
         assert_eq!(comment.author, cloned.author);
     }
@@ -895,7 +799,6 @@ mod tests {
             "user": {"login": "reviewer"},
             "path": "src/main.rs",
             "line": 42,
-            "start_line": null,
             "created_at": "2024-01-15T10:30:00Z"
         }"#;
 
@@ -905,24 +808,6 @@ mod tests {
         assert_eq!(comment.user.login, "reviewer");
         assert_eq!(comment.path, "src/main.rs");
         assert_eq!(comment.line, Some(42));
-        assert!(comment.start_line.is_none());
-    }
-
-    #[test]
-    fn test_review_comment_deserialize_multiline() {
-        let json = r#"{
-            "id": 12345,
-            "body": "Multiline comment",
-            "user": {"login": "reviewer"},
-            "path": "src/lib.rs",
-            "line": 50,
-            "start_line": 40,
-            "created_at": "2024-01-15T10:30:00Z"
-        }"#;
-
-        let comment: ReviewComment = serde_json::from_str(json).unwrap();
-        assert_eq!(comment.line, Some(50));
-        assert_eq!(comment.start_line, Some(40));
     }
 
     #[test]

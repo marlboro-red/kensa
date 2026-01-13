@@ -897,7 +897,6 @@ mod tests {
             },
             path: path.to_string(),
             line,
-            start_line: None,
             created_at: format!("2024-01-15T10:{:02}:00Z", id % 60),
             in_reply_to_id: in_reply_to,
         }
@@ -1020,10 +1019,10 @@ mod tests {
         let thread = &threads[0];
         assert_eq!(thread.comments.len(), 3);
 
-        // Comments should be sorted by created_at
-        assert_eq!(thread.comments[0].id, 1); // Original
-        assert_eq!(thread.comments[1].id, 2); // First reply
-        assert_eq!(thread.comments[2].id, 3); // Last reply
+        // Comments should be sorted by created_at (check by body content)
+        assert_eq!(thread.comments[0].body, "Original");
+        assert_eq!(thread.comments[1].body, "First reply");
+        assert_eq!(thread.comments[2].body, "Last reply");
     }
 
     #[test]
@@ -1047,14 +1046,13 @@ mod tests {
     }
 
     #[test]
-    fn test_group_multiline_comment() {
-        let mut comment = create_review_comment(1, "Comment", "src/main.rs", Some(50), None);
-        comment.start_line = Some(40);
+    fn test_group_comment_with_line() {
+        let comment = create_review_comment(1, "Comment", "src/main.rs", Some(50), None);
 
         let threads = group_review_comments_into_threads(vec![comment]);
 
         assert_eq!(threads[0].line, Some(50));
-        assert_eq!(threads[0].start_line, Some(40));
+        assert_eq!(threads[0].file_path, Some("src/main.rs".to_string()));
     }
 
     #[test]

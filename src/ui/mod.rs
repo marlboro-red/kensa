@@ -3318,13 +3318,14 @@ impl App {
         frame.render_widget(block, popup_area);
 
         // Pre-calculate all lines for scrolling
-        let wrap_width = (inner_area.width as usize).saturating_sub(2);
+        let wrap_width = (inner_area.width as usize).saturating_sub(4);
         let mut all_lines: Vec<(String, Style)> = Vec::new();
         let header_style = Style::default()
             .fg(Color::Green)
             .bg(Color::Rgb(30, 30, 40))
             .add_modifier(Modifier::BOLD);
         let body_style = Style::default().fg(Color::White).bg(Color::Rgb(30, 30, 40));
+        let code_style = Style::default().fg(Color::Yellow).bg(Color::Rgb(20, 20, 30));
         let separator_style = Style::default().bg(Color::Rgb(30, 30, 40));
 
         for comment in &thread.comments {
@@ -3333,10 +3334,16 @@ impl App {
             let header = format!("@{} - {}", comment.author, time_ago);
             all_lines.push((header, header_style));
 
-            // Comment body (word-wrapped)
-            let wrapped = Self::wrap_text(&comment.body, wrap_width);
-            for line in wrapped {
-                all_lines.push((format!(" {}", line), body_style));
+            // Comment body (word-wrapped, with code block detection)
+            let wrapped = Self::wrap_text_with_code(&comment.body, wrap_width);
+            for (line, is_code) in wrapped {
+                if is_code {
+                    // Convert tabs to spaces for proper terminal rendering
+                    let display_line = line.replace('\t', "    ");
+                    all_lines.push((format!("  │ {}", display_line), code_style));
+                } else {
+                    all_lines.push((format!(" {}", line), body_style));
+                }
             }
 
             // Separator (empty line)
@@ -3848,35 +3855,63 @@ impl App {
     }
 
     /// Character-based text wrapping - breaks at width boundary
-    fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    /// Returns Vec of (line, is_code_block)
+    fn wrap_text_with_code(text: &str, width: usize) -> Vec<(String, bool)> {
         if width == 0 {
-            return vec![text.to_string()];
+            return vec![(text.to_string(), false)];
         }
 
         let mut result = Vec::new();
+        let mut in_code_block = false;
 
         // First split by newlines, then wrap each line
         for line in text.split('\n') {
-            if line.is_empty() {
-                result.push(String::new());
+            // Detect code block markers
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                in_code_block = !in_code_block;
+                // Skip the ``` marker line itself
                 continue;
             }
 
-            let chars: Vec<char> = line.chars().collect();
-            let mut i = 0;
-            while i < chars.len() {
-                let end = (i + width).min(chars.len());
-                let wrapped_line: String = chars[i..end].iter().collect();
-                result.push(wrapped_line);
-                i = end;
+            if line.is_empty() {
+                result.push((String::new(), in_code_block));
+                continue;
+            }
+
+            // For code blocks, preserve exact whitespace and don't wrap aggressively
+            if in_code_block {
+                // Don't wrap code lines, just truncate if needed
+                if line.len() > width {
+                    result.push((line[..width].to_string(), true));
+                } else {
+                    result.push((line.to_string(), true));
+                }
+            } else {
+                let chars: Vec<char> = line.chars().collect();
+                let mut i = 0;
+                while i < chars.len() {
+                    let end = (i + width).min(chars.len());
+                    let wrapped_line: String = chars[i..end].iter().collect();
+                    result.push((wrapped_line, false));
+                    i = end;
+                }
             }
         }
 
         if result.is_empty() {
-            result.push(String::new());
+            result.push((String::new(), false));
         }
 
         result
+    }
+
+    /// Simple wrap_text for non-code content
+    fn wrap_text(text: &str, width: usize) -> Vec<String> {
+        Self::wrap_text_with_code(text, width)
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect()
     }
 
     fn render_tree(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -4599,4 +4634,45 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wrap_text_with_code_preserves_whitespace() {
+        let text = "Here is some code:\n```\n    indented line\n\tline with tab\n  two spaces\n```\nAfter code";
+        let result = App::wrap_text_with_code(text, 80);
+
+        // Find the code lines
+        let code_lines: Vec<_> = result.iter().filter(|(_, is_code)| *is_code).collect();
+
+        assert_eq!(code_lines.len(), 3, "Should have 3 code lines");
+        assert_eq!(code_lines[0].0, "    indented line", "Should preserve 4-space indent");
+        assert_eq!(code_lines[1].0, "\tline with tab", "Should preserve tab");
+        assert_eq!(code_lines[2].0, "  two spaces", "Should preserve 2-space indent");
+    }
+
+    #[test]
+    fn test_wrap_text_with_code_detects_blocks() {
+        let text = "Normal text\n```rust\nfn main() {}\n```\nMore text";
+        let result = App::wrap_text_with_code(text, 80);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], ("Normal text".to_string(), false));
+        assert_eq!(result[1], ("fn main() {}".to_string(), true));
+        assert_eq!(result[2], ("More text".to_string(), false));
+    }
+
+    #[test]
+    fn test_wrap_text_with_code_empty_lines_in_code() {
+        let text = "```\nline1\n\nline2\n```";
+        let result = App::wrap_text_with_code(text, 80);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], ("line1".to_string(), true));
+        assert_eq!(result[1], (String::new(), true)); // empty line in code block
+        assert_eq!(result[2], ("line2".to_string(), true));
+    }
 }
