@@ -3146,8 +3146,9 @@ impl App {
         selected: usize,
         scroll: usize,
     ) {
-        let popup_width = (area.width * 3 / 4).min(100);
-        let popup_height = (area.height * 2 / 3).min(25);
+        // Make popup wider to accommodate preview pane
+        let popup_width = (area.width * 4 / 5).min(140);
+        let popup_height = (area.height * 3 / 4).min(30);
         let popup_area = Self::centered_popup(area, popup_width, popup_height);
 
         let title = format!(
@@ -3176,18 +3177,42 @@ impl App {
             return;
         }
 
+        // Split into list (left, 45%) and preview (right, 55%)
+        let list_width = (inner_area.width * 45 / 100).max(30);
+        let preview_width = inner_area.width.saturating_sub(list_width + 1); // +1 for separator
+
+        let list_area = Rect {
+            x: inner_area.x,
+            y: inner_area.y,
+            width: list_width,
+            height: inner_area.height,
+        };
+
+        let preview_area = Rect {
+            x: inner_area.x + list_width + 1,
+            y: inner_area.y,
+            width: preview_width,
+            height: inner_area.height,
+        };
+
         let buf = frame.buffer_mut();
 
-        // Render thread list
+        // Draw separator line
+        let sep_x = inner_area.x + list_width;
+        for y in inner_area.y..inner_area.y + inner_area.height {
+            buf.set_string(sep_x, y, "│", Style::default().fg(Color::DarkGray).bg(Color::Rgb(35, 35, 45)));
+        }
+
+        // Render thread list (left pane)
         for (row, (idx, thread)) in self
             .comment_threads
             .iter()
             .enumerate()
             .skip(scroll)
-            .take(inner_area.height as usize)
+            .take(list_area.height as usize)
             .enumerate()
         {
-            let y = inner_area.y + row as u16;
+            let y = list_area.y + row as u16;
             let is_selected = idx == selected;
 
             let style = if is_selected {
@@ -3196,22 +3221,23 @@ impl App {
                 Style::default().fg(Color::White).bg(Color::Rgb(35, 35, 45))
             };
 
-            // Clear line
-            for x in inner_area.x..inner_area.x + inner_area.width {
+            // Clear line in list area
+            for x in list_area.x..list_area.x + list_area.width {
                 buf.set_string(x, y, " ", style);
             }
 
             // Thread location
+            let max_path_len = 20.min(list_area.width as usize / 2);
             let location = if let Some(path) = &thread.file_path {
-                let short_path = if path.len() > 25 {
-                    format!("...{}", &path[path.len() - 22..])
+                let short_path = if path.len() > max_path_len {
+                    format!("...{}", &path[path.len().saturating_sub(max_path_len - 3)..])
                 } else {
                     path.clone()
                 };
                 if let Some(line) = thread.line {
-                    format!("[{}:{}]", short_path, line)
+                    format!("{}:{}", short_path, line)
                 } else {
-                    format!("[{}]", short_path)
+                    short_path
                 }
             } else {
                 "[General]".to_string()
@@ -3221,22 +3247,95 @@ impl App {
             let author = format!(" @{}", thread.author());
 
             // Render location
-            buf.set_string(inner_area.x, y, &location, style.fg(Color::Cyan));
+            buf.set_string(list_area.x, y, &location, style.fg(Color::Cyan));
 
             // Render count
-            let count_x = inner_area.x + location.len() as u16;
-            buf.set_string(count_x, y, &comment_count, style.fg(Color::Yellow));
+            let count_x = list_area.x + location.len() as u16;
+            if count_x < list_area.x + list_area.width {
+                buf.set_string(count_x, y, &comment_count, style.fg(Color::Yellow));
+            }
 
-            // Render author
+            // Render author if space permits
             let author_x = count_x + comment_count.len() as u16;
-            buf.set_string(author_x, y, &author, style.fg(Color::Green));
+            if author_x + 5 < list_area.x + list_area.width {
+                let available = (list_area.width as usize).saturating_sub((author_x - list_area.x) as usize);
+                let truncated_author: String = author.chars().take(available).collect();
+                buf.set_string(author_x, y, &truncated_author, style.fg(Color::Green));
+            }
+        }
 
-            // Preview of first comment
-            let preview_x = author_x + author.len() as u16 + 1;
-            let available =
-                (inner_area.width as usize).saturating_sub((preview_x - inner_area.x) as usize);
-            let preview = thread.preview(available);
-            buf.set_string(preview_x, y, &preview, style.fg(Color::Gray));
+        // Render preview pane (right side) - show selected thread's content
+        if let Some(thread) = self.comment_threads.get(selected) {
+            let preview_bg = Color::Rgb(30, 30, 40);
+
+            // Clear preview area with slightly different background
+            for y in preview_area.y..preview_area.y + preview_area.height {
+                for x in preview_area.x..preview_area.x + preview_area.width {
+                    buf.set_string(x, y, " ", Style::default().bg(preview_bg));
+                }
+            }
+
+            // Preview header
+            let header = format!(" Preview - {} comment(s) ", thread.comment_count());
+            buf.set_string(
+                preview_area.x,
+                preview_area.y,
+                &header,
+                Style::default().fg(Color::Cyan).bg(preview_bg).add_modifier(Modifier::BOLD),
+            );
+
+            // Render first comment preview with word wrapping
+            if let Some(first_comment) = thread.comments.first() {
+                let content_start_y = preview_area.y + 2;
+                let available_height = preview_area.height.saturating_sub(2) as usize;
+                let wrap_width = (preview_area.width as usize).saturating_sub(2);
+
+                // Author line
+                let author_line = format!("@{}", first_comment.author);
+                buf.set_string(
+                    preview_area.x + 1,
+                    preview_area.y + 1,
+                    &author_line,
+                    Style::default().fg(Color::Green).bg(preview_bg),
+                );
+
+                // Word-wrap the comment body
+                let wrapped = Self::wrap_text_with_code(&first_comment.body, wrap_width);
+
+                for (line_idx, (line, is_code)) in wrapped.iter().take(available_height).enumerate() {
+                    let y = content_start_y + line_idx as u16;
+                    let style = if *is_code {
+                        Style::default().fg(Color::Yellow).bg(preview_bg)
+                    } else {
+                        Style::default().fg(Color::White).bg(preview_bg)
+                    };
+
+                    let display_line = if *is_code {
+                        line.replace('\t', "    ")
+                    } else {
+                        line.clone()
+                    };
+
+                    buf.set_string(preview_area.x + 1, y, &display_line, style);
+                }
+
+                // Show "more" indicator if there are more comments or lines
+                let total_lines = wrapped.len();
+                if total_lines > available_height || thread.comments.len() > 1 {
+                    let more_msg = if thread.comments.len() > 1 {
+                        format!("... +{} more comment(s)", thread.comments.len() - 1)
+                    } else {
+                        "... (more)".to_string()
+                    };
+                    let msg_y = preview_area.y + preview_area.height - 1;
+                    buf.set_string(
+                        preview_area.x + 1,
+                        msg_y,
+                        &more_msg,
+                        Style::default().fg(Color::DarkGray).bg(preview_bg),
+                    );
+                }
+            }
         }
     }
 
