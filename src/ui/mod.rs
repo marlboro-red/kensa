@@ -3840,22 +3840,30 @@ impl App {
             return vec![text.to_string()];
         }
 
-        let mut lines = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
+        let mut result = Vec::new();
 
-        if chars.is_empty() {
-            return vec![String::new()];
+        // First split by newlines, then wrap each line
+        for line in text.split('\n') {
+            if line.is_empty() {
+                result.push(String::new());
+                continue;
+            }
+
+            let chars: Vec<char> = line.chars().collect();
+            let mut i = 0;
+            while i < chars.len() {
+                let end = (i + width).min(chars.len());
+                let wrapped_line: String = chars[i..end].iter().collect();
+                result.push(wrapped_line);
+                i = end;
+            }
         }
 
-        let mut i = 0;
-        while i < chars.len() {
-            let end = (i + width).min(chars.len());
-            let line: String = chars[i..end].iter().collect();
-            lines.push(line);
-            i = end;
+        if result.is_empty() {
+            result.push(String::new());
         }
 
-        lines
+        result
     }
 
     fn render_tree(&self, frame: &mut ratatui::Frame, area: Rect) {
