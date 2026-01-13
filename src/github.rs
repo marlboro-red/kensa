@@ -645,29 +645,72 @@ pub async fn submit_thread_reply(
     Ok(())
 }
 
-/// Submit a PR review (approve, request changes, or comment)
+/// Submit a PR review (approve, request changes, or comment) with optional inline comments
 pub async fn submit_pr_review(
     pr: &PrInfo,
     event: &str,  // "APPROVE", "REQUEST_CHANGES", or "COMMENT"
     body: Option<&str>,
-) -> Result<()> {
+    pending_comments: Option<&[PendingComment]>,
+    head_sha: Option<&str>,
+) -> Result<usize> {
     let repo = format!("{}/{}", pr.owner, pr.repo);
+
+    // REQUEST_CHANGES requires a body
+    if event == "REQUEST_CHANGES" && body.map(|b| b.is_empty()).unwrap_or(true) {
+        return Err(anyhow!("Request changes requires a comment"));
+    }
+
+    // Separate inline and general comments
+    let (inline_comments, general_comments): (Vec<_>, Vec<_>) = pending_comments
+        .map(|c| c.iter().partition(|c| c.is_inline()))
+        .unwrap_or_default();
+
+    // Get head SHA if we have inline comments
+    let commit_id = if !inline_comments.is_empty() {
+        match head_sha {
+            Some(s) => s.to_string(),
+            None => fetch_pr_head_sha(pr).await?,
+        }
+    } else {
+        String::new()
+    };
+
+    // Build the review comments array for inline comments
+    let review_comments: Vec<serde_json::Value> = inline_comments
+        .iter()
+        .map(|c| {
+            let mut comment_obj = serde_json::json!({
+                "path": c.file_path.as_ref().unwrap(),
+                "line": c.line_number.unwrap(),
+                "body": c.body,
+                "side": "RIGHT"
+            });
+
+            if let Some(start_line) = c.start_line {
+                comment_obj["start_line"] = serde_json::json!(start_line);
+                comment_obj["start_side"] = serde_json::json!("RIGHT");
+            }
+
+            comment_obj
+        })
+        .collect();
 
     // Build the request body
     let mut request_body = serde_json::json!({
         "event": event
     });
 
-    // Add body if provided (required for REQUEST_CHANGES, optional for others)
+    // Add body if provided
     if let Some(body_text) = body {
         if !body_text.is_empty() {
             request_body["body"] = serde_json::json!(body_text);
         }
     }
 
-    // REQUEST_CHANGES requires a body
-    if event == "REQUEST_CHANGES" && body.map(|b| b.is_empty()).unwrap_or(true) {
-        return Err(anyhow!("Request changes requires a comment"));
+    // Add inline comments and commit_id if we have any
+    if !review_comments.is_empty() {
+        request_body["comments"] = serde_json::json!(review_comments);
+        request_body["commit_id"] = serde_json::json!(commit_id);
     }
 
     let body_json = serde_json::to_string(&request_body)
@@ -700,7 +743,15 @@ pub async fn submit_pr_review(
         return Err(anyhow!("Failed to submit review: {}", stderr));
     }
 
-    Ok(())
+    let mut submitted = inline_comments.len();
+
+    // Submit general comments (these can't be batched via Review API)
+    for comment in general_comments {
+        submit_pr_comment(pr, comment, None).await?;
+        submitted += 1;
+    }
+
+    Ok(submitted)
 }
 
 #[cfg(test)]

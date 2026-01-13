@@ -129,6 +129,9 @@ pub enum CommentMode {
         selected_action: usize,  // 0=Approve, 1=Request Changes, 2=Comment Only
         body: String,            // Optional review comment
         editing_body: bool,      // True when typing in comment area
+        reviewing_drafts: bool,  // True when reviewing draft comments before submission
+        selected_draft: usize,   // Which draft is selected (when reviewing_drafts)
+        editing_draft: bool,     // True when editing selected draft text
     },
 }
 
@@ -213,7 +216,7 @@ pub struct App {
     pr_list_receiver: Option<mpsc::Receiver<Result<(Vec<ReviewPr>, Vec<ReviewPr>), String>>>,
     comment_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,
     reply_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,  // thread_index on success
-    review_submit_receiver: Option<mpsc::Receiver<Result<String, String>>>,  // review action on success
+    review_submit_receiver: Option<mpsc::Receiver<Result<(String, usize), String>>>,  // (review action, comments count) on success
 }
 
 impl App {
@@ -751,13 +754,21 @@ impl App {
             if let Some(ref receiver) = self.review_submit_receiver {
                 if let Ok(result) = receiver.try_recv() {
                     match result {
-                        Ok(event) => {
-                            let msg = match event.as_str() {
-                                "APPROVE" => "PR approved!",
-                                "REQUEST_CHANGES" => "Changes requested on PR!",
-                                _ => "Review comment submitted!",
+                        Ok((event, comments_count)) => {
+                            let base_msg = match event.as_str() {
+                                "APPROVE" => "PR approved",
+                                "REQUEST_CHANGES" => "Changes requested on PR",
+                                _ => "Review comment submitted",
                             };
-                            self.loading = LoadingState::Success(msg.to_string());
+                            let msg = if comments_count > 0 {
+                                format!("{} with {} comment(s)!", base_msg, comments_count)
+                            } else {
+                                format!("{}!", base_msg)
+                            };
+                            self.loading = LoadingState::Success(msg);
+                            // Clear pending comments after successful submission
+                            self.pending_comments.clear();
+                            self.save_current_drafts();
                         }
                         Err(e) => {
                             self.loading = LoadingState::Error(format!("Failed: {}", e));
@@ -1143,7 +1154,14 @@ impl App {
         }
 
         // Handle submitting review mode
-        if let CommentMode::SubmittingReview { ref mut selected_action, ref mut body, ref mut editing_body } = self.comment_mode {
+        if let CommentMode::SubmittingReview {
+            ref mut selected_action,
+            ref mut body,
+            ref mut editing_body,
+            ref mut reviewing_drafts,
+            ref mut selected_draft,
+            ref mut editing_draft,
+        } = self.comment_mode {
             // Check for submit shortcut: Ctrl+Enter or Alt+Enter
             let is_submit = match key.code {
                 KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => true,
@@ -1152,9 +1170,79 @@ impl App {
             };
 
             if is_submit {
+                // If we have drafts and haven't reviewed them yet, switch to draft review mode
+                if !*reviewing_drafts && !self.pending_comments.is_empty() {
+                    *reviewing_drafts = true;
+                    *selected_draft = 0;
+                    return;
+                }
+                // Otherwise submit the review with all drafts
                 let action = *selected_action;
                 let review_body = if body.is_empty() { None } else { Some(body.clone()) };
                 self.submit_review(action, review_body);
+                return;
+            }
+
+            if *editing_draft {
+                // Editing a draft comment's text
+                let draft_idx = *selected_draft;
+                if draft_idx < self.pending_comments.len() {
+                    match key.code {
+                        KeyCode::Esc => {
+                            *editing_draft = false;
+                            self.save_current_drafts();
+                        }
+                        KeyCode::Enter => {
+                            self.pending_comments[draft_idx].body.push('\n');
+                        }
+                        KeyCode::Backspace => {
+                            self.pending_comments[draft_idx].body.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            self.pending_comments[draft_idx].body.push(c);
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
+
+            if *reviewing_drafts {
+                // In draft review mode
+                let draft_count = self.pending_comments.len();
+                match key.code {
+                    KeyCode::Esc => {
+                        // Go back to action selection
+                        *reviewing_drafts = false;
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if draft_count > 0 {
+                            *selected_draft = (*selected_draft + 1) % draft_count;
+                        }
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if draft_count > 0 {
+                            *selected_draft = selected_draft.checked_sub(1).unwrap_or(draft_count.saturating_sub(1));
+                        }
+                    }
+                    KeyCode::Char('e') | KeyCode::Enter => {
+                        // Edit selected draft
+                        if draft_count > 0 {
+                            *editing_draft = true;
+                        }
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('x') => {
+                        // Delete selected draft
+                        if draft_count > 0 && *selected_draft < draft_count {
+                            self.pending_comments.remove(*selected_draft);
+                            if *selected_draft >= self.pending_comments.len() && !self.pending_comments.is_empty() {
+                                *selected_draft = self.pending_comments.len() - 1;
+                            }
+                            self.save_current_drafts();
+                        }
+                    }
+                    _ => {}
+                }
                 return;
             }
 
@@ -1200,6 +1288,13 @@ impl App {
                     KeyCode::Char('c') | KeyCode::Enter => {
                         // Enter comment editing mode
                         *editing_body = true;
+                    }
+                    KeyCode::Char('d') => {
+                        // Go directly to draft review if there are drafts
+                        if !self.pending_comments.is_empty() {
+                            *reviewing_drafts = true;
+                            *selected_draft = 0;
+                        }
                     }
                     _ => {}
                 }
@@ -1358,6 +1453,9 @@ impl App {
                         selected_action: 0,
                         body: String::new(),
                         editing_body: false,
+                        reviewing_drafts: false,
+                        selected_draft: 0,
+                        editing_draft: false,
                     };
                 }
             }
@@ -1669,7 +1767,7 @@ impl App {
         });
     }
 
-    /// Submit a PR review (approve/request changes/comment)
+    /// Submit a PR review (approve/request changes/comment) with all pending comments
     fn submit_review(&mut self, action: usize, body: Option<String>) {
         let Some(ref pr) = self.current_pr else {
             return;
@@ -1687,8 +1785,18 @@ impl App {
             _ => "Commenting on",
         };
 
+        let comments_count = self.pending_comments.len();
+        let loading_msg = if comments_count > 0 {
+            format!("{} PR with {} comment(s)...", action_label, comments_count)
+        } else {
+            format!("{} PR...", action_label)
+        };
+
         let pr_info = pr.to_pr_info();
-        self.loading = LoadingState::Loading(format!("{} PR...", action_label));
+        let head_sha = pr.head_sha.clone();
+        let pending_comments = self.pending_comments.clone();
+
+        self.loading = LoadingState::Loading(loading_msg);
         self.comment_mode = CommentMode::None;
 
         let (tx, rx) = mpsc::channel();
@@ -1699,11 +1807,23 @@ impl App {
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
+            let comments_opt = if pending_comments.is_empty() {
+                None
+            } else {
+                Some(pending_comments.as_slice())
+            };
             let result = rt.block_on(
-                crate::github::submit_pr_review(&pr_info, &event_str, body_clone.as_deref())
+                crate::github::submit_pr_review(
+                    &pr_info,
+                    &event_str,
+                    body_clone.as_deref(),
+                    comments_opt,
+                    head_sha.as_deref(),
+                )
             );
 
-            let _ = tx.send(result.map(|_| event_str).map_err(|e| e.to_string()));
+            // Return (event, comments_submitted) on success
+            let _ = tx.send(result.map(|count| (event_str, count)).map_err(|e| e.to_string()));
         });
     }
 
@@ -2628,8 +2748,8 @@ impl App {
                 self.render_thread_detail(frame, area, *index, 0, 0);
                 self.render_reply_input(frame, area, text);
             }
-            CommentMode::SubmittingReview { selected_action, body, editing_body } => {
-                self.render_review_modal(frame, area, *selected_action, body, *editing_body);
+            CommentMode::SubmittingReview { selected_action, body, editing_body, reviewing_drafts, selected_draft, editing_draft } => {
+                self.render_review_modal(frame, area, *selected_action, body, *editing_body, *reviewing_drafts, *selected_draft, *editing_draft);
             }
         }
     }
@@ -3097,9 +3217,9 @@ impl App {
         }
     }
 
-    fn render_review_modal(&self, frame: &mut ratatui::Frame, area: Rect, selected_action: usize, body: &str, editing_body: bool) {
-        let popup_width = (area.width * 2 / 3).min(70);
-        let popup_height = 18;
+    fn render_review_modal(&self, frame: &mut ratatui::Frame, area: Rect, selected_action: usize, body: &str, editing_body: bool, reviewing_drafts: bool, selected_draft: usize, editing_draft: bool) {
+        let popup_width = (area.width * 2 / 3).min(80);
+        let popup_height = if reviewing_drafts { 22 } else { 20 };
         let popup_x = area.x + (area.width - popup_width) / 2;
         let popup_y = area.y + (area.height - popup_height) / 2;
 
@@ -3110,8 +3230,22 @@ impl App {
             height: popup_height,
         };
 
-        let title = " Submit Review (Ctrl+Enter to submit, Esc to cancel/back) ";
-        let border_color = if editing_body { Color::Green } else { Color::Cyan };
+        let title = if reviewing_drafts {
+            " Review Draft Comments (Ctrl+Enter to submit, Esc to go back) "
+        } else {
+            " Submit Review (Ctrl+Enter to submit, Esc to cancel) "
+        };
+
+        let border_color = if editing_draft {
+            Color::Green
+        } else if reviewing_drafts {
+            Color::Yellow
+        } else if editing_body {
+            Color::Green
+        } else {
+            Color::Cyan
+        };
+
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
@@ -3129,6 +3263,16 @@ impl App {
 
         frame.render_widget(block, popup_area);
 
+        if reviewing_drafts {
+            // Render draft review screen
+            self.render_draft_review(frame, inner_area, selected_draft, editing_draft);
+        } else {
+            // Render main review modal
+            self.render_review_main(frame, inner_area, selected_action, body, editing_body, popup_area);
+        }
+    }
+
+    fn render_review_main(&self, frame: &mut ratatui::Frame, inner_area: Rect, selected_action: usize, body: &str, editing_body: bool, popup_area: Rect) {
         // Render action options
         let actions = [
             ("1", "Approve", Color::Green),
@@ -3180,7 +3324,7 @@ impl App {
 
         // Render comment body area with border effect
         let body_start_y = separator_y + 1;
-        let body_height = 5u16;
+        let body_height = 4u16;
         let body_bg = if editing_body {
             Color::Rgb(30, 40, 30)
         } else {
@@ -3189,7 +3333,7 @@ impl App {
 
         // Clear body area
         for y in body_start_y..body_start_y + body_height {
-            if y >= inner_area.y + inner_area.height - 2 {
+            if y >= inner_area.y + inner_area.height - 4 {
                 break;
             }
             for x in inner_area.x..inner_area.x + inner_area.width {
@@ -3241,9 +3385,34 @@ impl App {
             }
         }
 
+        // Show draft comments count with 'd' to review
+        let drafts_y = body_start_y + body_height + 1;
+        let draft_count = self.pending_comments.len();
+        if draft_count > 0 {
+            let drafts_text = format!(
+                "Draft comments: {} (press 'd' to review)",
+                draft_count
+            );
+            buf.set_string(
+                inner_area.x,
+                drafts_y,
+                &drafts_text,
+                Style::default().fg(Color::Yellow),
+            );
+        } else {
+            buf.set_string(
+                inner_area.x,
+                drafts_y,
+                "No draft comments",
+                Style::default().fg(Color::DarkGray),
+            );
+        }
+
         // Instructions at bottom
         let instructions = if editing_body {
-            "Type comment | Esc: back to selection | Ctrl+Enter: submit"
+            "Type comment | Esc: back | Ctrl+Enter: submit"
+        } else if draft_count > 0 {
+            "j/k or 1/2/3: select | c: edit | d: review drafts | Ctrl+Enter: submit"
         } else {
             "j/k or 1/2/3: select | c/Enter: edit comment | Ctrl+Enter: submit"
         };
@@ -3256,6 +3425,144 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             );
         }
+    }
+
+    fn render_draft_review(&self, frame: &mut ratatui::Frame, inner_area: Rect, selected_draft: usize, editing_draft: bool) {
+        let buf = frame.buffer_mut();
+        let draft_count = self.pending_comments.len();
+
+        // Header
+        let header = format!("Review {} draft comment(s) before submission:", draft_count);
+        buf.set_string(
+            inner_area.x,
+            inner_area.y,
+            &header,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        );
+
+        if draft_count == 0 {
+            buf.set_string(
+                inner_area.x,
+                inner_area.y + 2,
+                "No draft comments to review.",
+                Style::default().fg(Color::DarkGray),
+            );
+            buf.set_string(
+                inner_area.x,
+                inner_area.y + 4,
+                "Press Ctrl+Enter to submit review or Esc to go back.",
+                Style::default().fg(Color::DarkGray),
+            );
+            return;
+        }
+
+        // Calculate visible drafts
+        let list_start_y = inner_area.y + 2;
+        let list_height = (inner_area.height - 5) as usize;
+        let visible_drafts = list_height.min(draft_count);
+
+        // Calculate scroll offset
+        let scroll_offset = if selected_draft >= visible_drafts {
+            selected_draft - visible_drafts + 1
+        } else {
+            0
+        };
+
+        // Render visible drafts
+        for (i, draft) in self.pending_comments.iter().enumerate().skip(scroll_offset).take(visible_drafts) {
+            let y = list_start_y + (i - scroll_offset) as u16;
+            let is_selected = i == selected_draft;
+
+            let prefix = if is_selected { "> " } else { "  " };
+
+            // Show location for inline comments
+            let location = if let (Some(path), Some(line)) = (&draft.file_path, draft.line_number) {
+                let filename = path.rsplit('/').next().unwrap_or(path);
+                if let Some(start) = draft.start_line {
+                    format!("{}:{}-{}", filename, start, line)
+                } else {
+                    format!("{}:{}", filename, line)
+                }
+            } else {
+                "general".to_string()
+            };
+
+            // Format: "> [file:line] first line of comment..."
+            let comment_preview: String = draft.body.lines().next().unwrap_or("").chars().take(40).collect();
+            let display = format!("[{}] {}", location, comment_preview);
+
+            let style = if is_selected && editing_draft {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            } else if is_selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+
+            let truncated: String = display.chars().take(inner_area.width as usize - 4).collect();
+            buf.set_string(inner_area.x, y, prefix, style);
+            buf.set_string(inner_area.x + 2, y, &truncated, style);
+        }
+
+        // Show scroll indicator if needed
+        if draft_count > visible_drafts {
+            let scroll_info = format!("[{}/{}]", selected_draft + 1, draft_count);
+            buf.set_string(
+                inner_area.x + inner_area.width - scroll_info.len() as u16 - 1,
+                list_start_y,
+                &scroll_info,
+                Style::default().fg(Color::DarkGray),
+            );
+        }
+
+        // If editing a draft, show the full text in a text area
+        if editing_draft && selected_draft < draft_count {
+            let edit_y = list_start_y + visible_drafts as u16 + 1;
+            buf.set_string(
+                inner_area.x,
+                edit_y,
+                "Editing (Esc to save):",
+                Style::default().fg(Color::Green),
+            );
+
+            let edit_text = format!("{}_", self.pending_comments[selected_draft].body);
+            let edit_text_y = edit_y + 1;
+            let edit_bg = Color::Rgb(30, 40, 30);
+
+            // Clear edit area
+            for y in edit_text_y..edit_text_y + 3 {
+                if y >= inner_area.y + inner_area.height - 2 {
+                    break;
+                }
+                for x in inner_area.x..inner_area.x + inner_area.width {
+                    buf.set_string(x, y, " ", Style::default().bg(edit_bg));
+                }
+            }
+
+            // Render edit text
+            for (i, line) in edit_text.lines().enumerate().take(3) {
+                let y = edit_text_y + i as u16;
+                if y >= inner_area.y + inner_area.height - 2 {
+                    break;
+                }
+                let truncated: String = line.chars().take(inner_area.width as usize - 2).collect();
+                buf.set_string(inner_area.x + 1, y, &truncated, Style::default().fg(Color::White).bg(edit_bg));
+            }
+        }
+
+        // Instructions at bottom
+        let instructions = if editing_draft {
+            "Type to edit | Esc: save changes"
+        } else {
+            "j/k: navigate | e/Enter: edit | d/x: delete | Ctrl+Enter: submit | Esc: back"
+        };
+        let instr_y = inner_area.y + inner_area.height - 1;
+        buf.set_string(
+            inner_area.x,
+            instr_y,
+            instructions,
+            Style::default().fg(Color::DarkGray),
+        );
     }
 
     /// Format time as relative (e.g., "2h ago", "3d ago")
