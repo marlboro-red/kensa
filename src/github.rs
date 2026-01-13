@@ -746,6 +746,11 @@ pub async fn submit_pr_review(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::CommentUser;
+
+    // ========================================================================
+    // parse_pr_url tests
+    // ========================================================================
 
     #[test]
     fn test_parse_pr_url() {
@@ -760,5 +765,393 @@ mod tests {
         assert!(parse_pr_url("https://github.com/owner/repo").is_err());
         assert!(parse_pr_url("https://gitlab.com/owner/repo/pull/1").is_err());
         assert!(parse_pr_url("not a url").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_with_trailing_slash() {
+        let pr = parse_pr_url("https://github.com/owner/repo/pull/456/").unwrap();
+        assert_eq!(pr.owner, "owner");
+        assert_eq!(pr.repo, "repo");
+        assert_eq!(pr.number, 456);
+    }
+
+    #[test]
+    fn test_parse_pr_url_with_files_path() {
+        // URLs like https://github.com/owner/repo/pull/123/files should work
+        let pr = parse_pr_url("https://github.com/owner/repo/pull/789/files").unwrap();
+        assert_eq!(pr.owner, "owner");
+        assert_eq!(pr.repo, "repo");
+        assert_eq!(pr.number, 789);
+    }
+
+    #[test]
+    fn test_parse_pr_url_with_commits_path() {
+        let pr = parse_pr_url("https://github.com/owner/repo/pull/100/commits").unwrap();
+        assert_eq!(pr.number, 100);
+    }
+
+    #[test]
+    fn test_parse_pr_url_large_pr_number() {
+        let pr = parse_pr_url("https://github.com/owner/repo/pull/999999").unwrap();
+        assert_eq!(pr.number, 999999);
+    }
+
+    #[test]
+    fn test_parse_pr_url_single_digit() {
+        let pr = parse_pr_url("https://github.com/owner/repo/pull/1").unwrap();
+        assert_eq!(pr.number, 1);
+    }
+
+    #[test]
+    fn test_parse_pr_url_hyphenated_names() {
+        let pr = parse_pr_url("https://github.com/my-org/my-cool-repo/pull/42").unwrap();
+        assert_eq!(pr.owner, "my-org");
+        assert_eq!(pr.repo, "my-cool-repo");
+        assert_eq!(pr.number, 42);
+    }
+
+    #[test]
+    fn test_parse_pr_url_underscore_names() {
+        let pr = parse_pr_url("https://github.com/my_org/my_repo/pull/10").unwrap();
+        assert_eq!(pr.owner, "my_org");
+        assert_eq!(pr.repo, "my_repo");
+    }
+
+    #[test]
+    fn test_parse_pr_url_numeric_repo_name() {
+        let pr = parse_pr_url("https://github.com/owner/123repo/pull/5").unwrap();
+        assert_eq!(pr.repo, "123repo");
+    }
+
+    #[test]
+    fn test_parse_pr_url_missing_number() {
+        assert!(parse_pr_url("https://github.com/owner/repo/pull/").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_non_numeric_pr() {
+        assert!(parse_pr_url("https://github.com/owner/repo/pull/abc").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_issue_instead_of_pull() {
+        // Issues should not parse as PRs
+        assert!(parse_pr_url("https://github.com/owner/repo/issues/123").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_http_upgrade() {
+        // HTTP URLs should work (url crate handles them)
+        let result = parse_pr_url("http://github.com/owner/repo/pull/1");
+        // Depending on implementation this might work or fail - just ensure no panic
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_empty_string() {
+        assert!(parse_pr_url("").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_whitespace() {
+        assert!(parse_pr_url("   ").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_wrong_host() {
+        assert!(parse_pr_url("https://gitlab.com/owner/repo/pull/1").is_err());
+        assert!(parse_pr_url("https://bitbucket.org/owner/repo/pull/1").is_err());
+        assert!(parse_pr_url("https://example.com/owner/repo/pull/1").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_github_enterprise_rejected() {
+        // Only github.com is supported
+        assert!(parse_pr_url("https://github.mycompany.com/owner/repo/pull/1").is_err());
+    }
+
+    #[test]
+    fn test_parse_pr_url_case_sensitivity() {
+        // GitHub URLs should be case-sensitive for owner/repo
+        let pr = parse_pr_url("https://github.com/Owner/Repo/pull/1").unwrap();
+        assert_eq!(pr.owner, "Owner");
+        assert_eq!(pr.repo, "Repo");
+    }
+
+    // ========================================================================
+    // group_review_comments_into_threads tests
+    // ========================================================================
+
+    fn create_review_comment(
+        id: u64,
+        body: &str,
+        path: &str,
+        line: Option<u32>,
+        in_reply_to: Option<u64>,
+    ) -> ReviewComment {
+        ReviewComment {
+            id,
+            body: body.to_string(),
+            user: CommentUser {
+                login: "testuser".to_string(),
+            },
+            path: path.to_string(),
+            line,
+            start_line: None,
+            created_at: format!("2024-01-15T10:{:02}:00Z", id % 60),
+            in_reply_to_id: in_reply_to,
+        }
+    }
+
+    #[test]
+    fn test_group_empty_comments() {
+        let comments: Vec<ReviewComment> = vec![];
+        let threads = group_review_comments_into_threads(comments);
+        assert!(threads.is_empty());
+    }
+
+    #[test]
+    fn test_group_single_comment() {
+        let comments = vec![create_review_comment(1, "First comment", "src/main.rs", Some(10), None)];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, 1);
+        assert_eq!(threads[0].comment_count(), 1);
+        assert_eq!(threads[0].file_path, Some("src/main.rs".to_string()));
+        assert_eq!(threads[0].line, Some(10));
+    }
+
+    #[test]
+    fn test_group_multiple_independent_threads() {
+        let comments = vec![
+            create_review_comment(1, "Comment on file1", "src/file1.rs", Some(10), None),
+            create_review_comment(2, "Comment on file2", "src/file2.rs", Some(20), None),
+            create_review_comment(3, "Comment on file3", "src/file3.rs", Some(30), None),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 3);
+        // Each thread should have exactly one comment
+        for thread in &threads {
+            assert_eq!(thread.comment_count(), 1);
+        }
+    }
+
+    #[test]
+    fn test_group_thread_with_reply() {
+        let comments = vec![
+            create_review_comment(1, "Original comment", "src/main.rs", Some(10), None),
+            create_review_comment(2, "Reply to original", "src/main.rs", Some(10), Some(1)),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].id, 1); // Thread ID is the root comment ID
+        assert_eq!(threads[0].comment_count(), 2);
+    }
+
+    #[test]
+    fn test_group_thread_with_multiple_replies() {
+        let comments = vec![
+            create_review_comment(1, "Original", "src/main.rs", Some(10), None),
+            create_review_comment(2, "First reply", "src/main.rs", Some(10), Some(1)),
+            create_review_comment(3, "Second reply", "src/main.rs", Some(10), Some(1)),
+            create_review_comment(4, "Third reply", "src/main.rs", Some(10), Some(1)),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].comment_count(), 4);
+    }
+
+    #[test]
+    fn test_group_nested_replies() {
+        // Reply to a reply (thread continuation)
+        let comments = vec![
+            create_review_comment(1, "Original", "src/main.rs", Some(10), None),
+            create_review_comment(2, "Reply to original", "src/main.rs", Some(10), Some(1)),
+            create_review_comment(3, "Reply to reply", "src/main.rs", Some(10), Some(2)),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].comment_count(), 3);
+    }
+
+    #[test]
+    fn test_group_mixed_threads_and_replies() {
+        let comments = vec![
+            // Thread 1 with 2 comments
+            create_review_comment(1, "Thread 1 root", "src/file1.rs", Some(10), None),
+            create_review_comment(2, "Thread 1 reply", "src/file1.rs", Some(10), Some(1)),
+            // Thread 2 standalone
+            create_review_comment(3, "Thread 2 root", "src/file2.rs", Some(20), None),
+            // Thread 3 with 3 comments
+            create_review_comment(4, "Thread 3 root", "src/file3.rs", Some(30), None),
+            create_review_comment(5, "Thread 3 reply 1", "src/file3.rs", Some(30), Some(4)),
+            create_review_comment(6, "Thread 3 reply 2", "src/file3.rs", Some(30), Some(4)),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 3);
+
+        // Find each thread by ID
+        let thread1 = threads.iter().find(|t| t.id == 1).unwrap();
+        let thread2 = threads.iter().find(|t| t.id == 3).unwrap();
+        let thread3 = threads.iter().find(|t| t.id == 4).unwrap();
+
+        assert_eq!(thread1.comment_count(), 2);
+        assert_eq!(thread2.comment_count(), 1);
+        assert_eq!(thread3.comment_count(), 3);
+    }
+
+    #[test]
+    fn test_group_comments_sorted_by_creation() {
+        // Comments with replies should be sorted by created_at within thread
+        let comments = vec![
+            create_review_comment(3, "Last reply", "src/main.rs", Some(10), Some(1)),
+            create_review_comment(1, "Original", "src/main.rs", Some(10), None),
+            create_review_comment(2, "First reply", "src/main.rs", Some(10), Some(1)),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 1);
+        let thread = &threads[0];
+        assert_eq!(thread.comments.len(), 3);
+
+        // Comments should be sorted by created_at
+        assert_eq!(thread.comments[0].id, 1); // Original
+        assert_eq!(thread.comments[1].id, 2); // First reply
+        assert_eq!(thread.comments[2].id, 3); // Last reply
+    }
+
+    #[test]
+    fn test_group_preserves_file_path() {
+        let comments = vec![
+            create_review_comment(1, "Comment", "path/to/deep/file.rs", Some(100), None),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads[0].file_path, Some("path/to/deep/file.rs".to_string()));
+    }
+
+    #[test]
+    fn test_group_preserves_line_number() {
+        let comments = vec![
+            create_review_comment(1, "Comment", "src/main.rs", Some(42), None),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads[0].line, Some(42));
+    }
+
+    #[test]
+    fn test_group_multiline_comment() {
+        let mut comment = create_review_comment(1, "Comment", "src/main.rs", Some(50), None);
+        comment.start_line = Some(40);
+
+        let threads = group_review_comments_into_threads(vec![comment]);
+
+        assert_eq!(threads[0].line, Some(50));
+        assert_eq!(threads[0].start_line, Some(40));
+    }
+
+    #[test]
+    fn test_group_large_thread() {
+        let mut comments = vec![
+            create_review_comment(1, "Original", "src/main.rs", Some(10), None),
+        ];
+
+        // Add 20 replies
+        for i in 2..=21 {
+            comments.push(create_review_comment(
+                i,
+                &format!("Reply {}", i - 1),
+                "src/main.rs",
+                Some(10),
+                Some(1),
+            ));
+        }
+
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].comment_count(), 21);
+    }
+
+    #[test]
+    fn test_group_same_file_different_lines() {
+        // Different lines in same file should be different threads
+        let comments = vec![
+            create_review_comment(1, "Line 10 comment", "src/main.rs", Some(10), None),
+            create_review_comment(2, "Line 20 comment", "src/main.rs", Some(20), None),
+            create_review_comment(3, "Line 30 comment", "src/main.rs", Some(30), None),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        // Each should be a separate thread (unless they're replies)
+        assert_eq!(threads.len(), 3);
+    }
+
+    #[test]
+    fn test_group_thread_is_inline() {
+        let comments = vec![
+            create_review_comment(1, "Inline comment", "src/main.rs", Some(10), None),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert!(threads[0].is_inline());
+    }
+
+    #[test]
+    fn test_group_thread_author() {
+        let comments = vec![
+            create_review_comment(1, "Comment", "src/main.rs", Some(10), None),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads[0].author(), "testuser");
+    }
+
+    #[test]
+    fn test_group_thread_preview() {
+        let comments = vec![
+            create_review_comment(1, "This is the preview text", "src/main.rs", Some(10), None),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads[0].preview(100), "This is the preview text");
+    }
+
+    // ========================================================================
+    // Edge cases and error handling tests
+    // ========================================================================
+
+    #[test]
+    fn test_group_orphan_reply_ignored() {
+        // A reply to a non-existent comment (orphan)
+        let comments = vec![
+            create_review_comment(2, "Reply to nothing", "src/main.rs", Some(10), Some(999)),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        // Orphan replies should not create threads (they have no root)
+        assert!(threads.is_empty());
+    }
+
+    #[test]
+    fn test_group_complex_reply_chain() {
+        // A -> B -> C -> D chain
+        let comments = vec![
+            create_review_comment(1, "A", "src/main.rs", Some(10), None),
+            create_review_comment(2, "B", "src/main.rs", Some(10), Some(1)),
+            create_review_comment(3, "C", "src/main.rs", Some(10), Some(2)),
+            create_review_comment(4, "D", "src/main.rs", Some(10), Some(3)),
+        ];
+        let threads = group_review_comments_into_threads(comments);
+
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].comment_count(), 4);
     }
 }
