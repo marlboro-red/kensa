@@ -232,6 +232,7 @@ impl CommentThread {
     }
 
     /// Get a preview of the thread (first comment body truncated)
+    #[allow(dead_code)] // Used in tests, may be useful in future
     pub fn preview(&self, max_len: usize) -> String {
         self.comments
             .first()
