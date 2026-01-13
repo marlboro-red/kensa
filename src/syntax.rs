@@ -1,8 +1,8 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, ThemeSet};
-use syntect::parsing::SyntaxSet;
+use syntect::highlighting::{FontStyle, Theme, ThemeSet};
+use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 /// Syntax highlighter using syntect
 pub struct Highlighter {
@@ -42,54 +42,79 @@ impl Highlighter {
         }
     }
 
+    /// Get the syntax for a given path (with caching)
+    fn get_syntax(&self, path: &str) -> &SyntaxReference {
+        let ext = path.rsplit('.').next().unwrap_or("");
+        self.syntax_set
+            .find_syntax_by_extension(ext)
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text())
+    }
+
+    /// Get the theme
+    fn get_theme(&self) -> &Theme {
+        &self.theme_set.themes["base16-eighties.dark"]
+    }
+
+    /// Convert syntect style to ratatui spans
+    fn convert_to_spans(ranges: Vec<(syntect::highlighting::Style, &str)>) -> Vec<Span<'static>> {
+        ranges
+            .into_iter()
+            .map(|(style, text)| {
+                // Boost all colors to minimum brightness 180 for better readability
+                let (r, g, b) = ensure_min_brightness(
+                    style.foreground.r,
+                    style.foreground.g,
+                    style.foreground.b,
+                    180,
+                );
+                let fg = Color::Rgb(r, g, b);
+
+                let mut ratatui_style = Style::default().fg(fg);
+
+                if style.font_style.contains(FontStyle::BOLD) {
+                    ratatui_style = ratatui_style.add_modifier(ratatui::style::Modifier::BOLD);
+                }
+                if style.font_style.contains(FontStyle::ITALIC) {
+                    ratatui_style = ratatui_style.add_modifier(ratatui::style::Modifier::ITALIC);
+                }
+                if style.font_style.contains(FontStyle::UNDERLINE) {
+                    ratatui_style = ratatui_style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+                }
+
+                Span::styled(text.to_string(), ratatui_style)
+            })
+            .collect()
+    }
+
     /// Highlight a line of code, returning styled spans
     pub fn highlight_line<'a>(&self, content: &'a str, path: &str) -> Line<'a> {
-        let ext = path.rsplit('.').next().unwrap_or("");
-
-        let syntax = self
-            .syntax_set
-            .find_syntax_by_extension(ext)
-            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
-
-        let theme = &self.theme_set.themes["base16-eighties.dark"];
+        let syntax = self.get_syntax(path);
+        let theme = self.get_theme();
         let mut highlighter = HighlightLines::new(syntax, theme);
 
         match highlighter.highlight_line(content, &self.syntax_set) {
-            Ok(ranges) => {
-                let spans: Vec<Span> = ranges
-                    .into_iter()
-                    .map(|(style, text)| {
-                        // Boost all colors to minimum brightness 180 for better readability
-                        let (r, g, b) = ensure_min_brightness(
-                            style.foreground.r,
-                            style.foreground.g,
-                            style.foreground.b,
-                            180,
-                        );
-                        let fg = Color::Rgb(r, g, b);
-
-                        let mut ratatui_style = Style::default().fg(fg);
-
-                        if style.font_style.contains(FontStyle::BOLD) {
-                            ratatui_style =
-                                ratatui_style.add_modifier(ratatui::style::Modifier::BOLD);
-                        }
-                        if style.font_style.contains(FontStyle::ITALIC) {
-                            ratatui_style =
-                                ratatui_style.add_modifier(ratatui::style::Modifier::ITALIC);
-                        }
-                        if style.font_style.contains(FontStyle::UNDERLINE) {
-                            ratatui_style =
-                                ratatui_style.add_modifier(ratatui::style::Modifier::UNDERLINED);
-                        }
-
-                        Span::styled(text.to_string(), ratatui_style)
-                    })
-                    .collect();
-                Line::from(spans)
-            }
+            Ok(ranges) => Line::from(Self::convert_to_spans(ranges)),
             Err(_) => Line::from(content.to_string()),
         }
+    }
+
+    /// Highlight multiple lines at once (more efficient for batch operations)
+    /// This uses a single HighlightLines instance for all lines, properly maintaining
+    /// syntax state across lines for multi-line constructs.
+    pub fn highlight_lines(&self, lines: &[&str], path: &str) -> Vec<Line<'static>> {
+        let syntax = self.get_syntax(path);
+        let theme = self.get_theme();
+        let mut highlighter = HighlightLines::new(syntax, theme);
+
+        lines
+            .iter()
+            .map(|content| {
+                match highlighter.highlight_line(content, &self.syntax_set) {
+                    Ok(ranges) => Line::from(Self::convert_to_spans(ranges)),
+                    Err(_) => Line::from(content.to_string()),
+                }
+            })
+            .collect()
     }
 }
 
