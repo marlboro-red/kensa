@@ -1083,7 +1083,7 @@ impl App {
         } = self.comment_mode
         {
             match key.code {
-                KeyCode::Esc => {
+                KeyCode::Esc | KeyCode::Char('q') => {
                     self.comment_mode = CommentMode::None;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -1163,7 +1163,7 @@ impl App {
             }).unwrap_or(0);
 
             match key.code {
-                KeyCode::Esc => {
+                KeyCode::Esc | KeyCode::Char('q') => {
                     // Go back to thread list
                     let idx = index;
                     self.comment_mode = CommentMode::ViewingThreads {
@@ -3152,7 +3152,7 @@ impl App {
         let popup_area = Self::centered_popup(area, popup_width, popup_height);
 
         let title = format!(
-            " Comment Threads ({}) - j/k:nav  Enter:view  r:reply  g:goto  Esc:close ",
+            " Comment Threads ({}) - j/k:nav  Enter:view  r:reply  g:goto  q/Esc:close ",
             self.comment_threads.len()
         );
         let block = Block::default()
@@ -3365,7 +3365,7 @@ impl App {
             "General Comment".to_string()
         };
 
-        let title = format!(" {} - j/k:scroll  r:reply  Esc:back ", location);
+        let title = format!(" {} - j/k:scroll  r:reply  q/Esc:back ", location);
 
         let block = Block::default()
             .title(title)
