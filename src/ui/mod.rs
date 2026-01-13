@@ -1110,10 +1110,23 @@ impl App {
         // Handle viewing single thread detail mode
         if let CommentMode::ViewingThread {
             index,
-            ref mut selected,
-            scroll: _,
+            selected: _,
+            ref mut scroll,
         } = self.comment_mode
         {
+            // Calculate max scroll (total lines - visible height)
+            // Use approximate visible height of 20 lines for popup
+            let max_scroll = self.comment_threads.get(index).map(|thread| {
+                let wrap_width = 80; // Approximate wrap width
+                let mut total_lines = 0;
+                for comment in &thread.comments {
+                    total_lines += 1; // Header
+                    total_lines += Self::wrap_text(&comment.body, wrap_width).len();
+                    total_lines += 1; // Separator
+                }
+                total_lines.saturating_sub(20) // Approximate visible height
+            }).unwrap_or(0);
+
             match key.code {
                 KeyCode::Esc => {
                     // Go back to thread list
@@ -1124,16 +1137,16 @@ impl App {
                     };
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    if let Some(thread) = self.comment_threads.get(index) {
-                        if *selected < thread.comments.len().saturating_sub(1) {
-                            *selected += 1;
-                        }
-                    }
+                    *scroll = scroll.saturating_add(1).min(max_scroll);
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    if *selected > 0 {
-                        *selected -= 1;
-                    }
+                    *scroll = scroll.saturating_sub(1);
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    *scroll = scroll.saturating_add(10).min(max_scroll);
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    *scroll = scroll.saturating_sub(10);
                 }
                 KeyCode::Char('r') => {
                     let idx = index;
@@ -3256,7 +3269,7 @@ impl App {
         frame: &mut ratatui::Frame,
         area: Rect,
         thread_idx: usize,
-        selected: usize,
+        _selected: usize,
         scroll: usize,
     ) {
         let Some(thread) = self.comment_threads.get(thread_idx) else {
@@ -3285,7 +3298,7 @@ impl App {
             "General Comment".to_string()
         };
 
-        let title = format!(" {} - j/k:nav  r:reply  Esc:back ", location);
+        let title = format!(" {} - j/k:scroll  r:reply  Esc:back ", location);
 
         let block = Block::default()
             .title(title)
@@ -3304,54 +3317,54 @@ impl App {
 
         frame.render_widget(block, popup_area);
 
-        let buf = frame.buffer_mut();
+        // Pre-calculate all lines for scrolling
+        let wrap_width = (inner_area.width as usize).saturating_sub(2);
+        let mut all_lines: Vec<(String, Style)> = Vec::new();
+        let header_style = Style::default()
+            .fg(Color::Green)
+            .bg(Color::Rgb(30, 30, 40))
+            .add_modifier(Modifier::BOLD);
+        let body_style = Style::default().fg(Color::White).bg(Color::Rgb(30, 30, 40));
+        let separator_style = Style::default().bg(Color::Rgb(30, 30, 40));
 
-        // Render comments
-        let mut y = inner_area.y;
-        for (idx, comment) in thread.comments.iter().enumerate().skip(scroll) {
-            if y >= inner_area.y + inner_area.height - 1 {
-                break;
-            }
-
-            let is_selected = idx == selected;
-            let bg = if is_selected {
-                Color::Rgb(50, 50, 70)
-            } else {
-                Color::Rgb(30, 30, 40)
-            };
-
+        for comment in &thread.comments {
             // Author and timestamp
             let time_ago = Self::format_relative_time(&comment.created_at);
             let header = format!("@{} - {}", comment.author, time_ago);
-            buf.set_string(
-                inner_area.x,
-                y,
-                &header,
-                Style::default()
-                    .fg(Color::Green)
-                    .bg(bg)
-                    .add_modifier(Modifier::BOLD),
-            );
-            y += 1;
+            all_lines.push((header, header_style));
 
             // Comment body (word-wrapped)
-            let wrapped =
-                Self::wrap_text(&comment.body, (inner_area.width as usize).saturating_sub(2));
+            let wrapped = Self::wrap_text(&comment.body, wrap_width);
             for line in wrapped {
-                if y >= inner_area.y + inner_area.height {
-                    break;
-                }
-                buf.set_string(
-                    inner_area.x + 1,
-                    y,
-                    &line,
-                    Style::default().fg(Color::White).bg(bg),
-                );
-                y += 1;
+                all_lines.push((format!(" {}", line), body_style));
             }
 
-            // Separator
-            y += 1;
+            // Separator (empty line)
+            all_lines.push((String::new(), separator_style));
+        }
+
+        let buf = frame.buffer_mut();
+        let visible_height = inner_area.height as usize;
+        let total_lines = all_lines.len();
+
+        // Show scroll indicator if content is scrollable
+        if total_lines > visible_height {
+            let scroll_info = format!(" [{}/{}] ", scroll + 1, total_lines.saturating_sub(visible_height) + 1);
+            let info_x = popup_area.x + popup_area.width - scroll_info.len() as u16 - 1;
+            buf.set_string(
+                info_x,
+                popup_area.y,
+                &scroll_info,
+                Style::default().fg(Color::DarkGray).bg(Color::Rgb(30, 30, 40)),
+            );
+        }
+
+        // Render visible lines with scroll offset
+        for (i, (line, style)) in all_lines.iter().enumerate().skip(scroll).take(visible_height) {
+            let y = inner_area.y + (i - scroll) as u16;
+            if y < inner_area.y + inner_area.height {
+                buf.set_string(inner_area.x, y, line, *style);
+            }
         }
     }
 
