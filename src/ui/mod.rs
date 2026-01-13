@@ -1077,64 +1077,73 @@ impl App {
         }
 
         // Handle viewing threads list mode
-        if let CommentMode::ViewingThreads {
-            ref mut selected,
-            scroll: _,
-        } = self.comment_mode
-        {
+        if let CommentMode::ViewingThreads { selected, scroll: _ } = self.comment_mode {
+            // selected is a visual index (position in the display order)
+            // Get visual order and count before matching on key
+            let visual_order = self.thread_visual_order();
+            let visual_count = visual_order.len();
+            let current_selected = selected;
+            let thread_idx = visual_order.get(current_selected).copied();
+
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => {
                     self.comment_mode = CommentMode::None;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    if !self.comment_threads.is_empty()
-                        && *selected < self.comment_threads.len() - 1
-                    {
-                        *selected += 1;
+                    if visual_count > 0 && current_selected < visual_count - 1 {
+                        self.comment_mode = CommentMode::ViewingThreads {
+                            selected: current_selected + 1,
+                            scroll: 0,
+                        };
                     }
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    if *selected > 0 {
-                        *selected -= 1;
+                    if current_selected > 0 {
+                        self.comment_mode = CommentMode::ViewingThreads {
+                            selected: current_selected - 1,
+                            scroll: 0,
+                        };
                     }
                 }
                 KeyCode::Enter => {
-                    // Open thread detail view
-                    let idx = *selected;
-                    self.comment_mode = CommentMode::ViewingThread {
-                        index: idx,
-                        selected: 0,
-                        scroll: 0,
-                    };
+                    // Open thread detail view - convert visual index to original index
+                    if let Some(idx) = thread_idx {
+                        self.comment_mode = CommentMode::ViewingThread {
+                            index: idx,
+                            selected: current_selected, // Store visual index for returning
+                            scroll: 0,
+                        };
+                    }
                 }
                 KeyCode::Char('r') => {
-                    // Start reply
-                    let idx = *selected;
-                    self.comment_mode = CommentMode::ReplyingToThread {
-                        index: idx,
-                        text: String::new(),
-                    };
+                    // Start reply - convert visual index to original index
+                    if let Some(idx) = thread_idx {
+                        self.comment_mode = CommentMode::ReplyingToThread {
+                            index: idx,
+                            text: String::new(),
+                        };
+                    }
                 }
                 KeyCode::Char('g') => {
-                    // Jump to thread location in diff
-                    let idx = *selected;
-                    // Extract data before mutable operations
-                    let thread_info = self
-                        .comment_threads
-                        .get(idx)
-                        .and_then(|t| t.file_path.as_ref().map(|p| (p.clone(), t.line)));
+                    // Jump to thread location in diff - convert visual index to original index
+                    if let Some(idx) = thread_idx {
+                        let thread_info = self
+                            .comment_threads
+                            .get(idx)
+                            .and_then(|t| t.file_path.as_ref().map(|p| (p.clone(), t.line)));
 
-                    if let Some((path, line)) = thread_info {
-                        // Find file index and switch to it
-                        if let Some(file_idx) = self.files.iter().position(|f| f.path == path) {
-                            self.select_file(file_idx);
-                            self.focus = Focus::Diff;
-                            // Try to scroll to the line
-                            if let Some(ln) = line {
-                                self.scroll_offset = (ln as usize).saturating_sub(5);
+                        if let Some((path, line)) = thread_info {
+                            // Find file index and switch to it
+                            if let Some(file_idx) = self.files.iter().position(|f| f.path == path) {
+                                self.select_file(file_idx);
+                                self.focus = Focus::Diff;
+                                // Try to scroll to the line
+                                if let Some(ln) = line {
+                                    self.scroll_offset = (ln as usize).saturating_sub(5);
+                                }
                             }
+                            self.comment_mode = CommentMode::None;
                         }
-                        self.comment_mode = CommentMode::None;
                     }
                 }
                 _ => {}
@@ -1145,7 +1154,7 @@ impl App {
         // Handle viewing single thread detail mode
         if let CommentMode::ViewingThread {
             index,
-            selected: _,
+            selected: visual_idx,
             ref mut scroll,
         } = self.comment_mode
         {
@@ -1164,10 +1173,9 @@ impl App {
 
             match key.code {
                 KeyCode::Esc | KeyCode::Char('q') => {
-                    // Go back to thread list
-                    let idx = index;
+                    // Go back to thread list - use stored visual index
                     self.comment_mode = CommentMode::ViewingThreads {
-                        selected: idx,
+                        selected: visual_idx,
                         scroll: 0,
                     };
                 }
@@ -1996,6 +2004,30 @@ impl App {
             .get(&(file_path.to_string(), line))
             .map(|v| v.len())
             .unwrap_or(0)
+    }
+
+    /// Get the visual order of thread indices (current threads first, then outdated)
+    /// Returns a Vec where each element is the original index in self.comment_threads
+    fn thread_visual_order(&self) -> Vec<usize> {
+        let mut order = Vec::new();
+        // Current threads first
+        for (idx, thread) in self.comment_threads.iter().enumerate() {
+            if !thread.outdated {
+                order.push(idx);
+            }
+        }
+        // Then outdated threads
+        for (idx, thread) in self.comment_threads.iter().enumerate() {
+            if thread.outdated {
+                order.push(idx);
+            }
+        }
+        order
+    }
+
+    /// Convert a visual index to the original thread index
+    fn visual_to_thread_index(&self, visual_idx: usize) -> Option<usize> {
+        self.thread_visual_order().get(visual_idx).copied()
     }
 
     fn update_filtered_indices(&mut self) {
@@ -3151,10 +3183,19 @@ impl App {
         let popup_height = (area.height * 3 / 4).min(30);
         let popup_area = Self::centered_popup(area, popup_width, popup_height);
 
-        let title = format!(
-            " Comment Threads ({}) - j/k:nav  Enter:view  r:reply  g:goto  q/Esc:close ",
-            self.comment_threads.len()
-        );
+        let current_count = self.comment_threads.iter().filter(|t| !t.outdated).count();
+        let outdated_count = self.comment_threads.iter().filter(|t| t.outdated).count();
+        let title = if outdated_count > 0 {
+            format!(
+                " Comment Threads ({} current, {} outdated) - j/k:nav  Enter:view  r:reply  g:goto  q/Esc:close ",
+                current_count, outdated_count
+            )
+        } else {
+            format!(
+                " Comment Threads ({}) - j/k:nav  Enter:view  r:reply  g:goto  q/Esc:close ",
+                current_count
+            )
+        };
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
@@ -3203,67 +3244,137 @@ impl App {
             buf.set_string(sep_x, y, "│", Style::default().fg(Color::DarkGray).bg(Color::Rgb(35, 35, 45)));
         }
 
-        // Render thread list (left pane)
-        for (row, (idx, thread)) in self
+        // Separate threads into current and outdated, preserving original indices
+        let current_threads: Vec<(usize, &crate::types::CommentThread)> = self
             .comment_threads
             .iter()
             .enumerate()
+            .filter(|(_, t)| !t.outdated)
+            .collect();
+        let outdated_threads: Vec<(usize, &crate::types::CommentThread)> = self
+            .comment_threads
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.outdated)
+            .collect();
+
+        // Build display list: current section header, current threads, outdated section header, outdated threads
+        struct DisplayItem<'a> {
+            kind: DisplayKind<'a>,
+            visual_idx: Option<usize>, // Visual index for selection tracking
+        }
+        enum DisplayKind<'a> {
+            SectionHeader(&'static str),
+            Thread(&'a crate::types::CommentThread),
+        }
+
+        let mut display_items: Vec<DisplayItem> = Vec::new();
+        let mut visual_idx = 0usize;
+
+        // Add current section if there are current threads
+        if !current_threads.is_empty() {
+            display_items.push(DisplayItem {
+                kind: DisplayKind::SectionHeader("── Current ──"),
+                visual_idx: None,
+            });
+            for (_idx, thread) in &current_threads {
+                display_items.push(DisplayItem {
+                    kind: DisplayKind::Thread(thread),
+                    visual_idx: Some(visual_idx),
+                });
+                visual_idx += 1;
+            }
+        }
+
+        // Add outdated section if there are outdated threads
+        if !outdated_threads.is_empty() {
+            display_items.push(DisplayItem {
+                kind: DisplayKind::SectionHeader("── Outdated ──"),
+                visual_idx: None,
+            });
+            for (_idx, thread) in &outdated_threads {
+                display_items.push(DisplayItem {
+                    kind: DisplayKind::Thread(thread),
+                    visual_idx: Some(visual_idx),
+                });
+                visual_idx += 1;
+            }
+        }
+
+        // Render thread list (left pane)
+        for (row, item) in display_items
+            .iter()
             .skip(scroll)
             .take(list_area.height as usize)
             .enumerate()
         {
             let y = list_area.y + row as u16;
-            let is_selected = idx == selected;
 
-            let style = if is_selected {
-                Style::default().fg(Color::White).bg(Color::Rgb(60, 60, 80))
-            } else {
-                Style::default().fg(Color::White).bg(Color::Rgb(35, 35, 45))
-            };
-
-            // Clear line in list area
-            for x in list_area.x..list_area.x + list_area.width {
-                buf.set_string(x, y, " ", style);
-            }
-
-            // Thread location - show just filename, not full path
-            let location = if let Some(path) = &thread.file_path {
-                let filename = std::path::Path::new(path)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(path);
-                if let Some(line) = thread.line {
-                    format!("{}:{}", filename, line)
-                } else {
-                    filename.to_string()
+            match &item.kind {
+                DisplayKind::SectionHeader(header) => {
+                    let style = Style::default().fg(Color::DarkGray).bg(Color::Rgb(35, 35, 45));
+                    // Clear line
+                    for x in list_area.x..list_area.x + list_area.width {
+                        buf.set_string(x, y, " ", style);
+                    }
+                    buf.set_string(list_area.x, y, header, style);
                 }
-            } else {
-                "[General]".to_string()
-            };
+                DisplayKind::Thread(thread) => {
+                    let is_selected = item.visual_idx == Some(selected);
 
-            let comment_count = format!(" ({})", thread.comment_count());
-            let author = format!(" @{}", thread.author());
+                    let style = if is_selected {
+                        Style::default().fg(Color::White).bg(Color::Rgb(60, 60, 80))
+                    } else {
+                        Style::default().fg(Color::White).bg(Color::Rgb(35, 35, 45))
+                    };
 
-            // Render location
-            buf.set_string(list_area.x, y, &location, style.fg(Color::Cyan));
+                    // Clear line in list area
+                    for x in list_area.x..list_area.x + list_area.width {
+                        buf.set_string(x, y, " ", style);
+                    }
 
-            // Render count
-            let count_x = list_area.x + location.len() as u16;
-            if count_x < list_area.x + list_area.width {
-                buf.set_string(count_x, y, &comment_count, style.fg(Color::Yellow));
-            }
+                    // Thread location - show just filename, not full path
+                    let location = if let Some(path) = &thread.file_path {
+                        let filename = std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or(path);
+                        if let Some(line) = thread.line {
+                            format!("{}:{}", filename, line)
+                        } else {
+                            filename.to_string()
+                        }
+                    } else {
+                        "[General]".to_string()
+                    };
 
-            // Render author if space permits
-            let author_x = count_x + comment_count.len() as u16;
-            if author_x + 5 < list_area.x + list_area.width {
-                let available = (list_area.width as usize).saturating_sub((author_x - list_area.x) as usize);
-                let truncated_author: String = author.chars().take(available).collect();
-                buf.set_string(author_x, y, &truncated_author, style.fg(Color::Green));
+                    let comment_count = format!(" ({})", thread.comment_count());
+                    let author = format!(" @{}", thread.author());
+
+                    // Render location
+                    buf.set_string(list_area.x + 1, y, &location, style.fg(Color::Cyan));
+
+                    // Render count
+                    let next_x = list_area.x + 1 + location.len() as u16;
+                    if next_x < list_area.x + list_area.width {
+                        buf.set_string(next_x, y, &comment_count, style.fg(Color::Yellow));
+                    }
+
+                    // Render author if space permits
+                    let author_x = next_x + comment_count.len() as u16;
+                    if author_x + 5 < list_area.x + list_area.width {
+                        let available = (list_area.width as usize).saturating_sub((author_x - list_area.x) as usize);
+                        let truncated_author: String = author.chars().take(available).collect();
+                        buf.set_string(author_x, y, &truncated_author, style.fg(Color::Green));
+                    }
+                }
             }
         }
 
         // Render preview pane (right side) - show selected thread's content
-        if let Some(thread) = self.comment_threads.get(selected) {
+        // Convert visual index to original thread index
+        let thread_idx = self.visual_to_thread_index(selected);
+        if let Some(thread) = thread_idx.and_then(|idx| self.comment_threads.get(idx)) {
             let preview_bg = Color::Rgb(30, 30, 40);
 
             // Clear preview area with slightly different background
