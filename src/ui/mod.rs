@@ -3226,18 +3226,16 @@ impl App {
                 buf.set_string(x, y, " ", style);
             }
 
-            // Thread location
-            let max_path_len = 20.min(list_area.width as usize / 2);
+            // Thread location - show just filename, not full path
             let location = if let Some(path) = &thread.file_path {
-                let short_path = if path.len() > max_path_len {
-                    format!("...{}", &path[path.len().saturating_sub(max_path_len - 3)..])
-                } else {
-                    path.clone()
-                };
+                let filename = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(path);
                 if let Some(line) = thread.line {
-                    format!("{}:{}", short_path, line)
+                    format!("{}:{}", filename, line)
                 } else {
-                    short_path
+                    filename.to_string()
                 }
             } else {
                 "[General]".to_string()
@@ -3356,10 +3354,14 @@ impl App {
         let popup_area = Self::centered_popup(area, popup_width, popup_height);
 
         let location = if let Some(path) = &thread.file_path {
+            let filename = std::path::Path::new(path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(path);
             if let Some(line) = thread.line {
-                format!("{}:{}", path, line)
+                format!("{}:{}", filename, line)
             } else {
-                path.clone()
+                filename.to_string()
             }
         } else {
             "General Comment".to_string()
