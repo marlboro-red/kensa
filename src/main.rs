@@ -12,6 +12,11 @@ use crate::github::{check_gh_cli, fetch_my_prs, fetch_pr_diff, fetch_review_prs,
 use crate::parser::parse_diff;
 use crate::ui::App;
 
+const LOGO: &str = r#"
+  検査
+  kensa
+"#;
+
 #[derive(Parser)]
 #[command(name = "kensa")]
 #[command(about = "A fast TUI for reviewing GitHub PRs")]
@@ -25,6 +30,9 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Show logo
+    eprintln!("{}", LOGO);
 
     // Check gh CLI is available
     check_gh_cli().await?;
@@ -56,10 +64,7 @@ async fn main() -> Result<()> {
             eprintln!("Fetching PRs...");
 
             // Fetch both lists concurrently
-            let (review_prs, my_prs) = tokio::join!(
-                fetch_review_prs(),
-                fetch_my_prs()
-            );
+            let (review_prs, my_prs) = tokio::join!(fetch_review_prs(), fetch_my_prs());
 
             let review_prs = review_prs?;
             let my_prs = my_prs?;
