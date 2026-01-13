@@ -1110,10 +1110,23 @@ impl App {
         // Handle viewing single thread detail mode
         if let CommentMode::ViewingThread {
             index,
-            ref mut selected,
-            scroll: _,
+            selected: _,
+            ref mut scroll,
         } = self.comment_mode
         {
+            // Calculate max scroll (total lines - visible height)
+            // Use approximate visible height of 20 lines for popup
+            let max_scroll = self.comment_threads.get(index).map(|thread| {
+                let wrap_width = 80; // Approximate wrap width
+                let mut total_lines = 0;
+                for comment in &thread.comments {
+                    total_lines += 1; // Header
+                    total_lines += Self::wrap_text(&comment.body, wrap_width).len();
+                    total_lines += 1; // Separator
+                }
+                total_lines.saturating_sub(20) // Approximate visible height
+            }).unwrap_or(0);
+
             match key.code {
                 KeyCode::Esc => {
                     // Go back to thread list
@@ -1124,16 +1137,16 @@ impl App {
                     };
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
-                    if let Some(thread) = self.comment_threads.get(index) {
-                        if *selected < thread.comments.len().saturating_sub(1) {
-                            *selected += 1;
-                        }
-                    }
+                    *scroll = scroll.saturating_add(1).min(max_scroll);
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
-                    if *selected > 0 {
-                        *selected -= 1;
-                    }
+                    *scroll = scroll.saturating_sub(1);
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    *scroll = scroll.saturating_add(10).min(max_scroll);
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    *scroll = scroll.saturating_sub(10);
                 }
                 KeyCode::Char('r') => {
                     let idx = index;
@@ -3256,7 +3269,7 @@ impl App {
         frame: &mut ratatui::Frame,
         area: Rect,
         thread_idx: usize,
-        selected: usize,
+        _selected: usize,
         scroll: usize,
     ) {
         let Some(thread) = self.comment_threads.get(thread_idx) else {
@@ -3285,7 +3298,7 @@ impl App {
             "General Comment".to_string()
         };
 
-        let title = format!(" {} - j/k:nav  r:reply  Esc:back ", location);
+        let title = format!(" {} - j/k:scroll  r:reply  Esc:back ", location);
 
         let block = Block::default()
             .title(title)
@@ -3304,54 +3317,61 @@ impl App {
 
         frame.render_widget(block, popup_area);
 
-        let buf = frame.buffer_mut();
+        // Pre-calculate all lines for scrolling
+        let wrap_width = (inner_area.width as usize).saturating_sub(4);
+        let mut all_lines: Vec<(String, Style)> = Vec::new();
+        let header_style = Style::default()
+            .fg(Color::Green)
+            .bg(Color::Rgb(30, 30, 40))
+            .add_modifier(Modifier::BOLD);
+        let body_style = Style::default().fg(Color::White).bg(Color::Rgb(30, 30, 40));
+        let code_style = Style::default().fg(Color::Yellow).bg(Color::Rgb(20, 20, 30));
+        let separator_style = Style::default().bg(Color::Rgb(30, 30, 40));
 
-        // Render comments
-        let mut y = inner_area.y;
-        for (idx, comment) in thread.comments.iter().enumerate().skip(scroll) {
-            if y >= inner_area.y + inner_area.height - 1 {
-                break;
-            }
-
-            let is_selected = idx == selected;
-            let bg = if is_selected {
-                Color::Rgb(50, 50, 70)
-            } else {
-                Color::Rgb(30, 30, 40)
-            };
-
+        for comment in &thread.comments {
             // Author and timestamp
             let time_ago = Self::format_relative_time(&comment.created_at);
             let header = format!("@{} - {}", comment.author, time_ago);
-            buf.set_string(
-                inner_area.x,
-                y,
-                &header,
-                Style::default()
-                    .fg(Color::Green)
-                    .bg(bg)
-                    .add_modifier(Modifier::BOLD),
-            );
-            y += 1;
+            all_lines.push((header, header_style));
 
-            // Comment body (word-wrapped)
-            let wrapped =
-                Self::wrap_text(&comment.body, (inner_area.width as usize).saturating_sub(2));
-            for line in wrapped {
-                if y >= inner_area.y + inner_area.height {
-                    break;
+            // Comment body (word-wrapped, with code block detection)
+            let wrapped = Self::wrap_text_with_code(&comment.body, wrap_width);
+            for (line, is_code) in wrapped {
+                if is_code {
+                    // Convert tabs to spaces for proper terminal rendering
+                    let display_line = line.replace('\t', "    ");
+                    all_lines.push((format!("  │ {}", display_line), code_style));
+                } else {
+                    all_lines.push((format!(" {}", line), body_style));
                 }
-                buf.set_string(
-                    inner_area.x + 1,
-                    y,
-                    &line,
-                    Style::default().fg(Color::White).bg(bg),
-                );
-                y += 1;
             }
 
-            // Separator
-            y += 1;
+            // Separator (empty line)
+            all_lines.push((String::new(), separator_style));
+        }
+
+        let buf = frame.buffer_mut();
+        let visible_height = inner_area.height as usize;
+        let total_lines = all_lines.len();
+
+        // Show scroll indicator if content is scrollable
+        if total_lines > visible_height {
+            let scroll_info = format!(" [{}/{}] ", scroll + 1, total_lines.saturating_sub(visible_height) + 1);
+            let info_x = popup_area.x + popup_area.width - scroll_info.len() as u16 - 1;
+            buf.set_string(
+                info_x,
+                popup_area.y,
+                &scroll_info,
+                Style::default().fg(Color::DarkGray).bg(Color::Rgb(30, 30, 40)),
+            );
+        }
+
+        // Render visible lines with scroll offset
+        for (i, (line, style)) in all_lines.iter().enumerate().skip(scroll).take(visible_height) {
+            let y = inner_area.y + (i - scroll) as u16;
+            if y < inner_area.y + inner_area.height {
+                buf.set_string(inner_area.x, y, line, *style);
+            }
         }
     }
 
@@ -3835,27 +3855,63 @@ impl App {
     }
 
     /// Character-based text wrapping - breaks at width boundary
-    fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    /// Returns Vec of (line, is_code_block)
+    fn wrap_text_with_code(text: &str, width: usize) -> Vec<(String, bool)> {
         if width == 0 {
-            return vec![text.to_string()];
+            return vec![(text.to_string(), false)];
         }
 
-        let mut lines = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
+        let mut result = Vec::new();
+        let mut in_code_block = false;
 
-        if chars.is_empty() {
-            return vec![String::new()];
+        // First split by newlines, then wrap each line
+        for line in text.split('\n') {
+            // Detect code block markers
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                in_code_block = !in_code_block;
+                // Skip the ``` marker line itself
+                continue;
+            }
+
+            if line.is_empty() {
+                result.push((String::new(), in_code_block));
+                continue;
+            }
+
+            // For code blocks, preserve exact whitespace and don't wrap aggressively
+            if in_code_block {
+                // Don't wrap code lines, just truncate if needed
+                if line.len() > width {
+                    result.push((line[..width].to_string(), true));
+                } else {
+                    result.push((line.to_string(), true));
+                }
+            } else {
+                let chars: Vec<char> = line.chars().collect();
+                let mut i = 0;
+                while i < chars.len() {
+                    let end = (i + width).min(chars.len());
+                    let wrapped_line: String = chars[i..end].iter().collect();
+                    result.push((wrapped_line, false));
+                    i = end;
+                }
+            }
         }
 
-        let mut i = 0;
-        while i < chars.len() {
-            let end = (i + width).min(chars.len());
-            let line: String = chars[i..end].iter().collect();
-            lines.push(line);
-            i = end;
+        if result.is_empty() {
+            result.push((String::new(), false));
         }
 
-        lines
+        result
+    }
+
+    /// Simple wrap_text for non-code content
+    fn wrap_text(text: &str, width: usize) -> Vec<String> {
+        Self::wrap_text_with_code(text, width)
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect()
     }
 
     fn render_tree(&self, frame: &mut ratatui::Frame, area: Rect) {
@@ -4578,4 +4634,45 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wrap_text_with_code_preserves_whitespace() {
+        let text = "Here is some code:\n```\n    indented line\n\tline with tab\n  two spaces\n```\nAfter code";
+        let result = App::wrap_text_with_code(text, 80);
+
+        // Find the code lines
+        let code_lines: Vec<_> = result.iter().filter(|(_, is_code)| *is_code).collect();
+
+        assert_eq!(code_lines.len(), 3, "Should have 3 code lines");
+        assert_eq!(code_lines[0].0, "    indented line", "Should preserve 4-space indent");
+        assert_eq!(code_lines[1].0, "\tline with tab", "Should preserve tab");
+        assert_eq!(code_lines[2].0, "  two spaces", "Should preserve 2-space indent");
+    }
+
+    #[test]
+    fn test_wrap_text_with_code_detects_blocks() {
+        let text = "Normal text\n```rust\nfn main() {}\n```\nMore text";
+        let result = App::wrap_text_with_code(text, 80);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], ("Normal text".to_string(), false));
+        assert_eq!(result[1], ("fn main() {}".to_string(), true));
+        assert_eq!(result[2], ("More text".to_string(), false));
+    }
+
+    #[test]
+    fn test_wrap_text_with_code_empty_lines_in_code() {
+        let text = "```\nline1\n\nline2\n```";
+        let result = App::wrap_text_with_code(text, 80);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], ("line1".to_string(), true));
+        assert_eq!(result[1], (String::new(), true)); // empty line in code block
+        assert_eq!(result[2], ("line2".to_string(), true));
+    }
 }

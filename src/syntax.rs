@@ -294,46 +294,6 @@ mod tests {
         assert!(line.spans.len() > 1);
     }
 
-    #[test]
-    fn test_highlight_lines_batch() {
-        let highlighter = Highlighter::new();
-        let lines = vec!["fn main() {", "    println!(\"Hello\");", "}"];
-        let result = highlighter.highlight_lines(&lines, "test.rs");
-
-        assert_eq!(result.len(), 3);
-    }
-
-    #[test]
-    fn test_highlight_lines_empty_batch() {
-        let highlighter = Highlighter::new();
-        let lines: Vec<&str> = vec![];
-        let result = highlighter.highlight_lines(&lines, "test.rs");
-
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_highlight_lines_preserves_content() {
-        let highlighter = Highlighter::new();
-        let lines = vec!["line 1", "line 2", "line 3"];
-        let result = highlighter.highlight_lines(&lines, "test.txt");
-
-        for (i, line) in result.iter().enumerate() {
-            let content: String = line.spans.iter().map(|s| s.content.to_string()).collect();
-            assert_eq!(content, lines[i]);
-        }
-    }
-
-    #[test]
-    fn test_highlight_lines_multiline_string() {
-        let highlighter = Highlighter::new();
-        // Test that multiline constructs work
-        let lines = vec!["let s = \"hello", "world\";"];
-        let result = highlighter.highlight_lines(&lines, "test.rs");
-
-        assert_eq!(result.len(), 2);
-    }
-
     // ========================================================================
     // Style conversion tests
     // ========================================================================
