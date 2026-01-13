@@ -793,8 +793,8 @@ impl App {
             return;
         }
 
-        // Clear error on any key
-        if matches!(self.loading, LoadingState::Error(_)) {
+        // Clear error or success on any key
+        if matches!(self.loading, LoadingState::Error(_) | LoadingState::Success(_)) {
             self.loading = LoadingState::Idle;
             return;
         }
