@@ -645,6 +645,64 @@ pub async fn submit_thread_reply(
     Ok(())
 }
 
+/// Submit a PR review (approve, request changes, or comment)
+pub async fn submit_pr_review(
+    pr: &PrInfo,
+    event: &str,  // "APPROVE", "REQUEST_CHANGES", or "COMMENT"
+    body: Option<&str>,
+) -> Result<()> {
+    let repo = format!("{}/{}", pr.owner, pr.repo);
+
+    // Build the request body
+    let mut request_body = serde_json::json!({
+        "event": event
+    });
+
+    // Add body if provided (required for REQUEST_CHANGES, optional for others)
+    if let Some(body_text) = body {
+        if !body_text.is_empty() {
+            request_body["body"] = serde_json::json!(body_text);
+        }
+    }
+
+    // REQUEST_CHANGES requires a body
+    if event == "REQUEST_CHANGES" && body.map(|b| b.is_empty()).unwrap_or(true) {
+        return Err(anyhow!("Request changes requires a comment"));
+    }
+
+    let body_json = serde_json::to_string(&request_body)
+        .context("Failed to serialize request body")?;
+
+    let mut child = Command::new("gh")
+        .args([
+            "api",
+            &format!("repos/{}/pulls/{}/reviews", repo, pr.number),
+            "--input", "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn gh command")?;
+
+    // Write the JSON body to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(body_json.as_bytes()).await
+            .context("Failed to write to gh stdin")?;
+    }
+
+    let output = child.wait_with_output().await
+        .context("Failed to wait for gh command")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("Failed to submit review: {}", stderr));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

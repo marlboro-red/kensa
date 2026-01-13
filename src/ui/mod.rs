@@ -124,6 +124,12 @@ pub enum CommentMode {
         index: usize,
         text: String,
     },
+    /// Submitting a PR review (approve/request changes/comment)
+    SubmittingReview {
+        selected_action: usize,  // 0=Approve, 1=Request Changes, 2=Comment Only
+        body: String,            // Optional review comment
+        editing_body: bool,      // True when typing in comment area
+    },
 }
 
 /// Help display state
@@ -207,6 +213,7 @@ pub struct App {
     pr_list_receiver: Option<mpsc::Receiver<Result<(Vec<ReviewPr>, Vec<ReviewPr>), String>>>,
     comment_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,
     reply_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,  // thread_index on success
+    review_submit_receiver: Option<mpsc::Receiver<Result<String, String>>>,  // review action on success
 }
 
 impl App {
@@ -270,6 +277,7 @@ impl App {
             pr_list_receiver: None,
             comment_submit_receiver: None,
             reply_submit_receiver: None,
+            review_submit_receiver: None,
         }
     }
 
@@ -355,6 +363,7 @@ impl App {
             pr_list_receiver: None,
             comment_submit_receiver: None,
             reply_submit_receiver: None,
+            review_submit_receiver: None,
         }
     }
 
@@ -738,6 +747,26 @@ impl App {
                 }
             }
 
+            // Check for async review submission completion
+            if let Some(ref receiver) = self.review_submit_receiver {
+                if let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok(event) => {
+                            let msg = match event.as_str() {
+                                "APPROVE" => "PR approved!",
+                                "REQUEST_CHANGES" => "Changes requested on PR!",
+                                _ => "Review comment submitted!",
+                            };
+                            self.loading = LoadingState::Success(msg.to_string());
+                        }
+                        Err(e) => {
+                            self.loading = LoadingState::Error(format!("Failed: {}", e));
+                        }
+                    }
+                    self.review_submit_receiver = None;
+                }
+            }
+
             terminal.draw(|f| self.render(f))?;
 
             if event::poll(Duration::from_millis(50))? {
@@ -1113,6 +1142,71 @@ impl App {
             return;
         }
 
+        // Handle submitting review mode
+        if let CommentMode::SubmittingReview { ref mut selected_action, ref mut body, ref mut editing_body } = self.comment_mode {
+            // Check for submit shortcut: Ctrl+Enter or Alt+Enter
+            let is_submit = match key.code {
+                KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => true,
+                KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => true,
+                _ => false,
+            };
+
+            if is_submit {
+                let action = *selected_action;
+                let review_body = if body.is_empty() { None } else { Some(body.clone()) };
+                self.submit_review(action, review_body);
+                return;
+            }
+
+            if *editing_body {
+                // In comment editing mode - all keys go to text input
+                match key.code {
+                    KeyCode::Esc => {
+                        // Exit comment editing, go back to action selection
+                        *editing_body = false;
+                    }
+                    KeyCode::Enter => {
+                        body.push('\n');
+                    }
+                    KeyCode::Backspace => {
+                        body.pop();
+                    }
+                    KeyCode::Char(c) => {
+                        body.push(c);
+                    }
+                    _ => {}
+                }
+            } else {
+                // In action selection mode
+                match key.code {
+                    KeyCode::Esc => {
+                        self.comment_mode = CommentMode::None;
+                    }
+                    KeyCode::Char('1') => {
+                        *selected_action = 0;  // Approve
+                    }
+                    KeyCode::Char('2') => {
+                        *selected_action = 1;  // Request Changes
+                    }
+                    KeyCode::Char('3') => {
+                        *selected_action = 2;  // Comment Only
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        *selected_action = (*selected_action + 1) % 3;
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        *selected_action = selected_action.checked_sub(1).unwrap_or(2);
+                    }
+                    KeyCode::Char('c') | KeyCode::Enter => {
+                        // Enter comment editing mode
+                        *editing_body = true;
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
+
         // Handle search mode input
         if self.search_mode {
             match key.code {
@@ -1255,6 +1349,16 @@ impl App {
                 // Refresh comment threads
                 if self.current_pr.is_some() {
                     self.load_comment_threads();
+                }
+            }
+            KeyCode::Char('A') => {
+                // Open review submission modal
+                if self.current_pr.is_some() {
+                    self.comment_mode = CommentMode::SubmittingReview {
+                        selected_action: 0,
+                        body: String::new(),
+                        editing_body: false,
+                    };
                 }
             }
             KeyCode::Char('?') => {
@@ -1562,6 +1666,44 @@ impl App {
 
             // Return thread_index on success so we can navigate back to the right thread
             let _ = tx.send(result.map(|_| thread_index).map_err(|e| e.to_string()));
+        });
+    }
+
+    /// Submit a PR review (approve/request changes/comment)
+    fn submit_review(&mut self, action: usize, body: Option<String>) {
+        let Some(ref pr) = self.current_pr else {
+            return;
+        };
+
+        let event = match action {
+            0 => "APPROVE",
+            1 => "REQUEST_CHANGES",
+            _ => "COMMENT",
+        };
+
+        let action_label = match action {
+            0 => "Approving",
+            1 => "Requesting changes on",
+            _ => "Commenting on",
+        };
+
+        let pr_info = pr.to_pr_info();
+        self.loading = LoadingState::Loading(format!("{} PR...", action_label));
+        self.comment_mode = CommentMode::None;
+
+        let (tx, rx) = mpsc::channel();
+        self.review_submit_receiver = Some(rx);
+
+        let event_str = event.to_string();
+        let body_clone = body;
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(
+                crate::github::submit_pr_review(&pr_info, &event_str, body_clone.as_deref())
+            );
+
+            let _ = tx.send(result.map(|_| event_str).map_err(|e| e.to_string()));
         });
     }
 
@@ -2050,6 +2192,7 @@ impl App {
                 ("S", "Submit all pending comments"),
                 ("t", "View comment threads"),
                 ("T", "Refresh comment threads"),
+                ("A", "Submit PR review (approve/reject)"),
                 ("o", "Open PR in browser"),
                 ("Esc", "Exit visual mode / go back"),
                 ("q", "Back to PR list / quit"),
@@ -2485,6 +2628,9 @@ impl App {
                 self.render_thread_detail(frame, area, *index, 0, 0);
                 self.render_reply_input(frame, area, text);
             }
+            CommentMode::SubmittingReview { selected_action, body, editing_body } => {
+                self.render_review_modal(frame, area, *selected_action, body, *editing_body);
+            }
         }
     }
 
@@ -2913,6 +3059,149 @@ impl App {
                 inner_area.y + i as u16,
                 &truncated,
                 Style::default().fg(Color::White).bg(Color::Rgb(40, 50, 40)),
+            );
+        }
+    }
+
+    fn render_review_modal(&self, frame: &mut ratatui::Frame, area: Rect, selected_action: usize, body: &str, editing_body: bool) {
+        let popup_width = (area.width * 2 / 3).min(70);
+        let popup_height = 18;
+        let popup_x = area.x + (area.width - popup_width) / 2;
+        let popup_y = area.y + (area.height - popup_height) / 2;
+
+        let popup_area = Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        let title = " Submit Review (Ctrl+Enter to submit, Esc to cancel/back) ";
+        let border_color = if editing_body { Color::Green } else { Color::Cyan };
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+
+        let inner_area = block.inner(popup_area);
+
+        // Clear background
+        let buf = frame.buffer_mut();
+        for y in popup_area.y..popup_area.y + popup_area.height {
+            for x in popup_area.x..popup_area.x + popup_area.width {
+                buf.set_string(x, y, " ", Style::default().bg(Color::Rgb(35, 35, 50)));
+            }
+        }
+
+        frame.render_widget(block, popup_area);
+
+        // Render action options
+        let actions = [
+            ("1", "Approve", Color::Green),
+            ("2", "Request Changes", Color::Yellow),
+            ("3", "Comment Only", Color::Blue),
+        ];
+
+        let buf = frame.buffer_mut();
+        for (i, (key, label, color)) in actions.iter().enumerate() {
+            let y = inner_area.y + i as u16;
+            let is_selected = i == selected_action;
+
+            let prefix = if is_selected { "> " } else { "  " };
+            let style = if is_selected {
+                Style::default().fg(*color).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            // Dim action options when editing body
+            let style = if editing_body {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                style
+            };
+
+            buf.set_string(inner_area.x, y, prefix, style);
+            buf.set_string(
+                inner_area.x + 2,
+                y,
+                format!("[{}] {}", key, label),
+                style,
+            );
+        }
+
+        // Separator and comment label
+        let separator_y = inner_area.y + 4;
+        let comment_label = if editing_body {
+            "Comment (editing - Esc to go back):"
+        } else {
+            "Comment (press 'c' or Enter to edit):"
+        };
+        let label_style = if editing_body {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        buf.set_string(inner_area.x, separator_y, comment_label, label_style);
+
+        // Render comment body area with border effect
+        let body_start_y = separator_y + 1;
+        let body_height = 5u16;
+        let body_bg = if editing_body {
+            Color::Rgb(30, 40, 30)
+        } else {
+            Color::Rgb(30, 30, 40)
+        };
+
+        // Clear body area
+        for y in body_start_y..body_start_y + body_height {
+            if y >= inner_area.y + inner_area.height - 2 {
+                break;
+            }
+            for x in inner_area.x..inner_area.x + inner_area.width {
+                buf.set_string(x, y, " ", Style::default().bg(body_bg));
+            }
+        }
+
+        // Render comment text
+        let display_text = if editing_body {
+            format!("{}_", body)
+        } else if body.is_empty() {
+            "(no comment)".to_string()
+        } else {
+            body.to_string()
+        };
+
+        let text_style = if editing_body {
+            Style::default().fg(Color::White).bg(body_bg)
+        } else if body.is_empty() {
+            Style::default().fg(Color::DarkGray).bg(body_bg)
+        } else {
+            Style::default().fg(Color::Gray).bg(body_bg)
+        };
+
+        for (i, line) in display_text.lines().enumerate() {
+            let y = body_start_y + i as u16;
+            if y >= body_start_y + body_height || y >= inner_area.y + inner_area.height - 2 {
+                break;
+            }
+            let truncated: String = line.chars().take(inner_area.width as usize - 2).collect();
+            buf.set_string(inner_area.x + 1, y, &truncated, text_style);
+        }
+
+        // Instructions at bottom
+        let instructions = if editing_body {
+            "Type comment | Esc: back to selection | Ctrl+Enter: submit"
+        } else {
+            "j/k or 1/2/3: select | c/Enter: edit comment | Ctrl+Enter: submit"
+        };
+        let instr_y = popup_area.y + popup_area.height - 2;
+        if instr_y > inner_area.y {
+            buf.set_string(
+                inner_area.x,
+                instr_y,
+                instructions,
+                Style::default().fg(Color::DarkGray),
             );
         }
     }
