@@ -199,6 +199,22 @@ pub struct ReviewComment {
     pub created_at: String,
     #[serde(default)]
     pub in_reply_to_id: Option<u64>,
+    /// The SHA of the commit the comment is currently mapped to
+    #[serde(default)]
+    pub commit_id: Option<String>,
+    /// The SHA of the commit the comment was originally made on
+    #[serde(default)]
+    pub original_commit_id: Option<String>,
+}
+
+impl ReviewComment {
+    /// A comment is outdated if it was made on a different commit than where it's currently mapped
+    pub fn is_outdated(&self) -> bool {
+        match (&self.commit_id, &self.original_commit_id) {
+            (Some(current), Some(original)) => current != original,
+            _ => false,
+        }
+    }
 }
 
 /// An issue comment (general PR comment) from GitHub API
@@ -218,6 +234,7 @@ pub struct CommentThread {
     pub file_path: Option<String>,    // None for general PR comments
     pub line: Option<u32>,            // Line number for inline comments
     pub comments: Vec<ThreadComment>, // All comments in thread (root + replies)
+    pub outdated: bool,               // Whether this thread is on outdated code
 }
 
 impl CommentThread {
@@ -555,6 +572,7 @@ mod tests {
                 create_test_thread_comment("First comment", "user1"),
                 create_test_thread_comment("Second comment", "user2"),
             ],
+            outdated: false,
         }
     }
 
@@ -583,6 +601,7 @@ mod tests {
             file_path: None,
             line: None,
             comments: vec![],
+            outdated: false,
         };
         assert_eq!(thread.comment_count(), 0);
     }
@@ -611,6 +630,7 @@ mod tests {
             file_path: None,
             line: None,
             comments: vec![],
+            outdated: false,
         };
         assert_eq!(thread.preview(100), "");
     }
@@ -637,6 +657,7 @@ mod tests {
             file_path: None,
             line: None,
             comments: vec![],
+            outdated: false,
         };
         assert_eq!(thread.author(), "unknown");
     }

@@ -469,6 +469,7 @@ pub async fn fetch_all_comment_threads(pr: &PrInfo) -> Result<Vec<CommentThread>
                 author: comment.user.login,
                 created_at: comment.created_at,
             }],
+            outdated: false, // Issue comments are never outdated
         });
     }
 
@@ -544,6 +545,7 @@ fn group_review_comments_into_threads(comments: Vec<ReviewComment>) -> Vec<Comme
                 file_path: Some(root.path.clone()),
                 line: root.line,
                 comments: thread_comments,
+                outdated: root.is_outdated(),
             });
         }
     }
@@ -845,6 +847,8 @@ mod tests {
             line,
             created_at: format!("2024-01-15T10:{:02}:00Z", id % 60),
             in_reply_to_id: in_reply_to,
+            commit_id: Some("abc123".to_string()),
+            original_commit_id: Some("abc123".to_string()), // Same = not outdated
         }
     }
 
