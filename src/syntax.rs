@@ -8,6 +8,7 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 pub struct Highlighter {
     syntax_set: SyntaxSet,
     theme_set: ThemeSet,
+    min_brightness: u8,
 }
 
 /// Ensure a color has minimum brightness for readability
@@ -36,9 +37,14 @@ fn ensure_min_brightness(r: u8, g: u8, b: u8, min_brightness: u8) -> (u8, u8, u8
 
 impl Highlighter {
     pub fn new() -> Self {
+        Self::with_min_brightness(180)
+    }
+
+    pub fn with_min_brightness(min_brightness: u8) -> Self {
         Self {
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
+            min_brightness,
         }
     }
 
@@ -56,16 +62,16 @@ impl Highlighter {
     }
 
     /// Convert syntect style to ratatui spans
-    fn convert_to_spans(ranges: Vec<(syntect::highlighting::Style, &str)>) -> Vec<Span<'static>> {
+    fn convert_to_spans(ranges: Vec<(syntect::highlighting::Style, &str)>, min_brightness: u8) -> Vec<Span<'static>> {
         ranges
             .into_iter()
             .map(|(style, text)| {
-                // Boost all colors to minimum brightness 180 for better readability
+                // Boost all colors to minimum brightness for better readability
                 let (r, g, b) = ensure_min_brightness(
                     style.foreground.r,
                     style.foreground.g,
                     style.foreground.b,
-                    180,
+                    min_brightness,
                 );
                 let fg = Color::Rgb(r, g, b);
 
@@ -93,7 +99,7 @@ impl Highlighter {
         let mut highlighter = HighlightLines::new(syntax, theme);
 
         match highlighter.highlight_line(content, &self.syntax_set) {
-            Ok(ranges) => Line::from(Self::convert_to_spans(ranges)),
+            Ok(ranges) => Line::from(Self::convert_to_spans(ranges, self.min_brightness)),
             Err(_) => Line::from(content.to_string()),
         }
     }
@@ -301,7 +307,7 @@ mod tests {
     #[test]
     fn test_convert_to_spans_empty() {
         let ranges: Vec<(syntect::highlighting::Style, &str)> = vec![];
-        let spans = Highlighter::convert_to_spans(ranges);
+        let spans = Highlighter::convert_to_spans(ranges, 180);
         assert!(spans.is_empty());
     }
 
