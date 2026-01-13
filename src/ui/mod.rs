@@ -4581,21 +4581,24 @@ impl App {
                     };
                     buf.set_string(area.x, y, cursor_marker, marker_style);
 
-                    let gutter = format!("{} {} ", old_str, new_str);
-                    let gutter_width = gutter.len() + 1; // +1 for cursor marker
-
-                    // Render line numbers with special style for cursor line
-                    let gutter_style = if is_cursor_line {
-                        Style::default()
-                            .fg(Color::White)
-                            .bg(self.cursor_gutter())
-                            .add_modifier(Modifier::BOLD)
-                    } else if is_in_selection {
-                        Style::default().fg(Color::White).bg(Color::Rgb(60, 60, 90))
+                    let gutter_width = if self.config.display.show_line_numbers {
+                        let gutter = format!("{} {} ", old_str, new_str);
+                        // Render line numbers with special style for cursor line
+                        let gutter_style = if is_cursor_line {
+                            Style::default()
+                                .fg(Color::White)
+                                .bg(self.cursor_gutter())
+                                .add_modifier(Modifier::BOLD)
+                        } else if is_in_selection {
+                            Style::default().fg(Color::White).bg(Color::Rgb(60, 60, 90))
+                        } else {
+                            Style::default().fg(Color::DarkGray).bg(bg)
+                        };
+                        buf.set_string(area.x + 1, y, &gutter, gutter_style);
+                        gutter.len() + 1 // +1 for cursor marker
                     } else {
-                        Style::default().fg(Color::DarkGray).bg(bg)
+                        1 // Just the cursor marker
                     };
-                    buf.set_string(area.x + 1, y, &gutter, gutter_style);
 
                     // Comment thread indicator
                     let indicator_x = area.x + gutter_width as u16;
@@ -4641,24 +4644,26 @@ impl App {
                         x_offset += 1;
                     }
 
-                    // Then overlay syntax highlighted spans
-                    let highlighted = self.highlighter.highlight_line(&expanded_content, &file.path);
-                    x_offset = content_start_x;
-                    let mut char_idx = 0usize;
+                    // Then overlay syntax highlighted spans (if enabled)
+                    if self.config.display.syntax_highlighting {
+                        let highlighted = self.highlighter.highlight_line(&expanded_content, &file.path);
+                        x_offset = content_start_x;
+                        let mut char_idx = 0usize;
 
-                    for span in highlighted.spans {
-                        let span_style = span.style.bg(bg);
-                        for ch in span.content.chars() {
-                            if char_idx < h_scroll {
+                        for span in highlighted.spans {
+                            let span_style = span.style.bg(bg);
+                            for ch in span.content.chars() {
+                                if char_idx < h_scroll {
+                                    char_idx += 1;
+                                    continue;  // Skip scrolled characters
+                                }
+                                if x_offset >= max_x {
+                                    break;
+                                }
+                                buf.set_string(x_offset, y, &ch.to_string(), span_style);
+                                x_offset += 1;
                                 char_idx += 1;
-                                continue;  // Skip scrolled characters
                             }
-                            if x_offset >= max_x {
-                                break;
-                            }
-                            buf.set_string(x_offset, y, &ch.to_string(), span_style);
-                            x_offset += 1;
-                            char_idx += 1;
                         }
                     }
                 }
@@ -4828,10 +4833,13 @@ impl App {
             buf.set_string(cx, y, " ", Style::default().bg(bg));
         }
 
-        let gutter = format!("{:>4} ", ln);
-        let gutter_len = gutter.len() as u16;
-
-        buf.set_string(x, y, &gutter, Style::default().fg(Color::DarkGray).bg(bg));
+        let gutter_len = if self.config.display.show_line_numbers {
+            let gutter = format!("{:>4} ", ln);
+            buf.set_string(x, y, &gutter, Style::default().fg(Color::DarkGray).bg(bg));
+            gutter.len() as u16
+        } else {
+            0
+        };
 
         // Comment thread indicator
         let indicator_x = x + gutter_len;
@@ -4871,24 +4879,26 @@ impl App {
             x_offset += 1;
         }
 
-        // Then overlay syntax highlighted spans
-        let highlighted = self.highlighter.highlight_line(&expanded_content, path);
-        x_offset = content_start_x;
-        let mut char_idx = 0usize;
+        // Then overlay syntax highlighted spans (if enabled)
+        if self.config.display.syntax_highlighting {
+            let highlighted = self.highlighter.highlight_line(&expanded_content, path);
+            x_offset = content_start_x;
+            let mut char_idx = 0usize;
 
-        for span in highlighted.spans {
-            let span_style = span.style.bg(bg);
-            for ch in span.content.chars() {
-                if char_idx < h_scroll {
+            for span in highlighted.spans {
+                let span_style = span.style.bg(bg);
+                for ch in span.content.chars() {
+                    if char_idx < h_scroll {
+                        char_idx += 1;
+                        continue;  // Skip scrolled characters
+                    }
+                    if x_offset >= max_x {
+                        break;
+                    }
+                    buf.set_string(x_offset, y, &ch.to_string(), span_style);
+                    x_offset += 1;
                     char_idx += 1;
-                    continue;  // Skip scrolled characters
                 }
-                if x_offset >= max_x {
-                    break;
-                }
-                buf.set_string(x_offset, y, &ch.to_string(), span_style);
-                x_offset += 1;
-                char_idx += 1;
             }
         }
     }

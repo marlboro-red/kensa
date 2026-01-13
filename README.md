@@ -95,6 +95,63 @@ kensa https://github.com/owner/repo/pull/123
 - Vim-style keybindings
 - Automatic update notifications
 
+## Configuration
+
+kensa can be configured via a TOML file at:
+- **Linux/macOS:** `~/.config/kensa/config.toml`
+- **Windows:** `%APPDATA%\kensa\config.toml`
+
+See [`config.toml.example`](config.toml.example) for a complete example with all options.
+
+### Display Settings
+
+```toml
+[display]
+show_line_numbers = true      # Show line numbers in diff view
+default_view_mode = "unified" # "unified" or "split"
+syntax_highlighting = true    # Enable syntax highlighting
+min_brightness = 180          # Minimum color brightness (0-255)
+```
+
+### Diff Colors
+
+Customize diff colors using RGB values (0-255):
+
+```toml
+[colors]
+add_bg = { r = 30, g = 60, b = 30 }       # Added lines background
+del_bg = { r = 60, g = 30, b = 30 }       # Deleted lines background
+context_bg = { r = 22, g = 22, b = 22 }   # Context lines background
+cursor_bg = { r = 45, g = 45, b = 65 }    # Cursor line background
+cursor_gutter = { r = 100, g = 100, b = 180 } # Cursor gutter color
+```
+
+### Navigation Settings
+
+```toml
+[navigation]
+scroll_lines = 15               # Lines to scroll with Ctrl+u/d
+horizontal_scroll_columns = 10  # Columns to scroll with h/l
+tree_width = 45                 # File tree panel width
+collapse_folders_by_default = false # Start with folders collapsed
+```
+
+### Tab/Indentation Settings
+
+```toml
+default_tab_width = 4  # Default tab width
+
+# Language-specific tab widths (by file extension)
+[languages.go]
+tab_width = 8
+
+[languages.py]
+tab_width = 4
+
+[languages.js]
+tab_width = 2
+```
+
 ## License
 
 MIT
