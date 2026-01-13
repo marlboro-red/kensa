@@ -1,0 +1,94 @@
+# Kensa Configuration File
+# Copy this file to ~/.config/kensa/config.toml and customize as needed.
+# All settings are optional - defaults will be used for any missing values.
+
+# =============================================================================
+# INDENTATION SETTINGS
+# =============================================================================
+
+# Default tab width used when no language-specific setting exists
+# Set to 0 to preserve tabs as-is (no expansion)
+default_tab_width = 4
+
+# Language-specific tab width settings
+# The key is the file extension (without the dot)
+[languages.go]
+tab_width = 8
+
+[languages.py]
+tab_width = 4
+
+[languages.rs]
+tab_width = 4
+
+[languages.js]
+tab_width = 2
+
+[languages.ts]
+tab_width = 2
+
+[languages.yaml]
+tab_width = 2
+
+[languages.yml]
+tab_width = 2
+
+# Preserve tabs in Makefiles (tab_width = 0 disables expansion)
+[languages.mk]
+tab_width = 0
+
+# =============================================================================
+# DISPLAY SETTINGS
+# =============================================================================
+
+[display]
+# Show line numbers in the diff view
+show_line_numbers = true
+
+# Default view mode: "unified" or "split"
+# Press 'v' during review to toggle between modes
+default_view_mode = "unified"
+
+# Enable syntax highlighting for code
+syntax_highlighting = true
+
+# Minimum brightness for syntax colors (0-255)
+# Higher values make colors more visible on dark backgrounds
+min_brightness = 180
+
+# =============================================================================
+# DIFF COLORS (RGB values: 0-255)
+# =============================================================================
+
+[colors]
+# Background color for added lines (default: dark green)
+add_bg = { r = 30, g = 60, b = 30 }
+
+# Background color for deleted lines (default: dark red)
+del_bg = { r = 60, g = 30, b = 30 }
+
+# Background color for context lines (default: dark gray)
+context_bg = { r = 22, g = 22, b = 22 }
+
+# Background color for the cursor line (default: dark blue)
+cursor_bg = { r = 45, g = 45, b = 65 }
+
+# Gutter color for the cursor line (default: light blue)
+cursor_gutter = { r = 100, g = 100, b = 180 }
+
+# =============================================================================
+# NAVIGATION SETTINGS
+# =============================================================================
+
+[navigation]
+# Number of lines to scroll with Page Up/Down (Ctrl+u/Ctrl+d)
+scroll_lines = 15
+
+# Number of columns to scroll horizontally with h/l
+horizontal_scroll_columns = 10
+
+# Width of the file tree panel in characters
+tree_width = 45
+
+# Start with all folders collapsed in the file tree
+collapse_folders_by_default = false
