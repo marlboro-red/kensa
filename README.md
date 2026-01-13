@@ -9,7 +9,21 @@ A fast TUI for reviewing GitHub PRs.
 ## Installation
 
 ```bash
+cargo install --git https://github.com/marlboro-red/kensa
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/marlboro-red/kensa
+cd kensa
 cargo install --path .
+```
+
+## Updating
+
+```bash
+cargo install --git https://github.com/marlboro-red/kensa --force
 ```
 
 ## Usage
