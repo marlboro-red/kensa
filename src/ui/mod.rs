@@ -201,6 +201,12 @@ pub struct App {
     // Comment threads (existing comments from GitHub)
     comment_threads: Vec<CommentThread>,
     line_to_threads: HashMap<(String, u32), Vec<usize>>,  // Quick lookup: (file_path, line) -> thread indices
+
+    // Async receivers for non-blocking operations
+    comment_threads_receiver: Option<mpsc::Receiver<Result<Vec<CommentThread>, String>>>,
+    pr_list_receiver: Option<mpsc::Receiver<Result<(Vec<ReviewPr>, Vec<ReviewPr>), String>>>,
+    comment_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,
+    reply_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,  // thread_index on success
 }
 
 impl App {
@@ -259,6 +265,11 @@ impl App {
 
             comment_threads: Vec::new(),
             line_to_threads: HashMap::new(),
+
+            comment_threads_receiver: None,
+            pr_list_receiver: None,
+            comment_submit_receiver: None,
+            reply_submit_receiver: None,
         }
     }
 
@@ -339,6 +350,11 @@ impl App {
 
             comment_threads: Vec::new(),
             line_to_threads: HashMap::new(),
+
+            comment_threads_receiver: None,
+            pr_list_receiver: None,
+            comment_submit_receiver: None,
+            reply_submit_receiver: None,
         }
     }
 
@@ -601,7 +617,7 @@ impl App {
                             if let Some(ref mut pr) = self.current_pr {
                                 pr.head_sha = head_sha;
                             }
-                            // Load existing comment threads from GitHub
+                            // Load existing comment threads from GitHub (async)
                             self.load_comment_threads();
                         }
                         Err(e) => {
@@ -609,6 +625,116 @@ impl App {
                         }
                     }
                     self.diff_receiver = None;
+                }
+            }
+
+            // Check for async comment threads loading completion
+            if let Some(ref receiver) = self.comment_threads_receiver {
+                if let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok(threads) => {
+                            self.build_line_to_threads_map(&threads);
+                            self.comment_threads = threads;
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to load comment threads: {}", e);
+                            self.comment_threads = Vec::new();
+                            self.line_to_threads.clear();
+                            self.line_to_threads.shrink_to_fit();
+                        }
+                    }
+                    self.comment_threads_receiver = None;
+                }
+            }
+
+            // Check for async PR list refresh completion
+            if let Some(ref receiver) = self.pr_list_receiver {
+                if let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok((mut review_prs, mut my_prs)) => {
+                            // Sort by repo for proper grouping
+                            review_prs.sort_by(|a, b| {
+                                a.repo_full_name().cmp(&b.repo_full_name())
+                                    .then_with(|| b.number.cmp(&a.number))
+                            });
+                            my_prs.sort_by(|a, b| {
+                                a.repo_full_name().cmp(&b.repo_full_name())
+                                    .then_with(|| b.number.cmp(&a.number))
+                            });
+
+                            let review_count = review_prs.len();
+                            let my_count = my_prs.len();
+
+                            let mut repos: Vec<String> = review_prs
+                                .iter()
+                                .chain(my_prs.iter())
+                                .map(|pr| pr.repo_full_name())
+                                .collect::<HashSet<_>>()
+                                .into_iter()
+                                .collect();
+                            repos.sort();
+
+                            self.review_prs = review_prs;
+                            self.my_prs = my_prs;
+                            self.available_repos = repos;
+                            self.filtered_review_pr_indices = (0..review_count).collect();
+                            self.filtered_my_pr_indices = (0..my_count).collect();
+                            self.selected_review_pr = 0;
+                            self.selected_my_pr = 0;
+                            self.review_pr_scroll = 0;
+                            self.my_pr_scroll = 0;
+                            self.repo_filter = None;
+                            self.repo_filter_index = 0;
+                            self.loading = LoadingState::Idle;
+                        }
+                        Err(e) => {
+                            self.loading = LoadingState::Error(e);
+                        }
+                    }
+                    self.pr_list_receiver = None;
+                }
+            }
+
+            // Check for async comment submission completion
+            if let Some(ref receiver) = self.comment_submit_receiver {
+                if let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok(submitted) => {
+                            self.pending_comments.clear();
+                            self.selected_pending_comment = 0;
+                            self.save_current_drafts();
+                            self.loading = LoadingState::Success(format!(
+                                "Successfully submitted {} comment(s)!",
+                                submitted
+                            ));
+                        }
+                        Err(e) => {
+                            self.loading = LoadingState::Error(format!("Failed to submit: {}", e));
+                        }
+                    }
+                    self.comment_submit_receiver = None;
+                }
+            }
+
+            // Check for async reply submission completion
+            if let Some(ref receiver) = self.reply_submit_receiver {
+                if let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok(thread_index) => {
+                            self.loading = LoadingState::Success("Reply submitted!".to_string());
+                            // Refresh threads to show new reply
+                            self.load_comment_threads();
+                            // Go back to threads list
+                            self.comment_mode = CommentMode::ViewingThreads {
+                                selected: thread_index,
+                                scroll: 0,
+                            };
+                        }
+                        Err(e) => {
+                            self.loading = LoadingState::Error(format!("Failed: {}", e));
+                        }
+                    }
+                    self.reply_submit_receiver = None;
                 }
             }
 
@@ -1355,73 +1481,30 @@ impl App {
     }
 
     fn refresh_pr_list(&mut self) {
-        // For simplicity, do a blocking refresh
+        // Non-blocking async refresh - results are processed in event_loop
         self.loading = LoadingState::Loading("Refreshing PRs...".to_string());
 
-        let (tx_review, rx_review) = mpsc::channel();
-        let (tx_my, rx_my) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
+        self.pr_list_receiver = Some(rx);
 
-        // Fetch both lists in parallel
+        // Fetch both lists in parallel in a single background thread
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(crate::github::fetch_review_prs());
-            let _ = tx_review.send(result.map_err(|e| e.to_string()));
+            let result = rt.block_on(async {
+                let (review_result, my_result) = tokio::join!(
+                    crate::github::fetch_review_prs(),
+                    crate::github::fetch_my_prs()
+                );
+
+                match (review_result, my_result) {
+                    (Ok(review_prs), Ok(my_prs)) => Ok((review_prs, my_prs)),
+                    (Err(e), _) => Err(e.to_string()),
+                    (_, Err(e)) => Err(e.to_string()),
+                }
+            });
+
+            let _ = tx.send(result);
         });
-
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            let result = rt.block_on(crate::github::fetch_my_prs());
-            let _ = tx_my.send(result.map_err(|e| e.to_string()));
-        });
-
-        // Wait for both results
-        let review_result = rx_review.recv();
-        let my_result = rx_my.recv();
-
-        match (review_result, my_result) {
-            (Ok(Ok(mut review_prs)), Ok(Ok(mut my_prs))) => {
-                // Sort by repo for proper grouping
-                review_prs.sort_by(|a, b| {
-                    a.repo_full_name().cmp(&b.repo_full_name())
-                        .then_with(|| b.number.cmp(&a.number))
-                });
-                my_prs.sort_by(|a, b| {
-                    a.repo_full_name().cmp(&b.repo_full_name())
-                        .then_with(|| b.number.cmp(&a.number))
-                });
-
-                let review_count = review_prs.len();
-                let my_count = my_prs.len();
-
-                let mut repos: Vec<String> = review_prs
-                    .iter()
-                    .chain(my_prs.iter())
-                    .map(|pr| pr.repo_full_name())
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .collect();
-                repos.sort();
-
-                self.review_prs = review_prs;
-                self.my_prs = my_prs;
-                self.available_repos = repos;
-                self.filtered_review_pr_indices = (0..review_count).collect();
-                self.filtered_my_pr_indices = (0..my_count).collect();
-                self.selected_review_pr = 0;
-                self.selected_my_pr = 0;
-                self.review_pr_scroll = 0;
-                self.my_pr_scroll = 0;
-                self.repo_filter = None;
-                self.repo_filter_index = 0;
-                self.loading = LoadingState::Idle;
-            }
-            (Ok(Err(e)), _) | (_, Ok(Err(e))) => {
-                self.loading = LoadingState::Error(e);
-            }
-            _ => {
-                self.loading = LoadingState::Error("Failed to refresh PRs".to_string());
-            }
-        }
     }
 
     fn submit_pending_comments(&mut self) {
@@ -1441,32 +1524,18 @@ impl App {
         self.loading = LoadingState::Loading(format!("Submitting {} comment(s)...", count));
         self.comment_mode = CommentMode::None;
 
-        // Submit comments in a separate thread to avoid runtime nesting
-        let handle = std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                crate::github::submit_pr_comments(&pr_info, &comments, head_sha.as_deref()).await
-            })
-        });
+        let (tx, rx) = mpsc::channel();
+        self.comment_submit_receiver = Some(rx);
 
-        // Wait for the result
-        match handle.join() {
-            Ok(Ok(submitted)) => {
-                self.pending_comments.clear();
-                self.selected_pending_comment = 0;
-                self.save_current_drafts();  // Clear saved drafts too
-                self.loading = LoadingState::Success(format!(
-                    "Successfully submitted {} comment(s)!",
-                    submitted
-                ));
-            }
-            Ok(Err(e)) => {
-                self.loading = LoadingState::Error(format!("Failed to submit: {}", e));
-            }
-            Err(_) => {
-                self.loading = LoadingState::Error("Thread panicked during submission".to_string());
-            }
-        }
+        // Submit comments in a separate thread - results processed in event_loop
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(async {
+                crate::github::submit_pr_comments(&pr_info, &comments, head_sha.as_deref()).await
+            });
+
+            let _ = tx.send(result.map_err(|e| e.to_string()));
+        });
     }
 
     /// Submit a reply to an existing comment thread
@@ -1483,30 +1552,17 @@ impl App {
 
         self.loading = LoadingState::Loading("Submitting reply...".to_string());
 
-        // Submit in a separate thread
-        let handle = std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(crate::github::submit_thread_reply(&pr_info, &thread, &body_clone))
-        });
+        let (tx, rx) = mpsc::channel();
+        self.reply_submit_receiver = Some(rx);
 
-        match handle.join() {
-            Ok(Ok(())) => {
-                self.loading = LoadingState::Success("Reply submitted!".to_string());
-                // Refresh threads to show new reply
-                self.load_comment_threads();
-                // Go back to threads list
-                self.comment_mode = CommentMode::ViewingThreads {
-                    selected: thread_index,
-                    scroll: 0,
-                };
-            }
-            Ok(Err(e)) => {
-                self.loading = LoadingState::Error(format!("Failed: {}", e));
-            }
-            Err(_) => {
-                self.loading = LoadingState::Error("Thread panicked".to_string());
-            }
-        }
+        // Submit in a separate thread - results processed in event_loop
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(crate::github::submit_thread_reply(&pr_info, &thread, &body_clone));
+
+            // Return thread_index on success so we can navigate back to the right thread
+            let _ = tx.send(result.map(|_| thread_index).map_err(|e| e.to_string()));
+        });
     }
 
     /// Save current drafts to disk
@@ -1529,7 +1585,7 @@ impl App {
         }
     }
 
-    /// Load comment threads for the current PR from GitHub
+    /// Load comment threads for the current PR from GitHub (non-blocking)
     fn load_comment_threads(&mut self) {
         let Some(ref pr) = self.current_pr else {
             return;
@@ -1537,34 +1593,27 @@ impl App {
 
         let pr_info = pr.to_pr_info();
 
-        // Spawn a thread to fetch comments (blocking)
-        let handle = std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(crate::github::fetch_all_comment_threads(&pr_info))
-        });
+        let (tx, rx) = mpsc::channel();
+        self.comment_threads_receiver = Some(rx);
 
-        match handle.join() {
-            Ok(Ok(threads)) => {
-                self.build_line_to_threads_map(&threads);
-                self.comment_threads = threads;
-            }
-            Ok(Err(e)) => {
-                // Silently ignore thread loading errors - they're not critical
-                eprintln!("Warning: Failed to load comment threads: {}", e);
-                self.comment_threads = Vec::new();
-                self.line_to_threads.clear();
-            }
-            Err(_) => {
-                eprintln!("Warning: Thread panicked while loading comments");
-                self.comment_threads = Vec::new();
-                self.line_to_threads.clear();
-            }
-        }
+        // Spawn a thread to fetch comments - results processed in event_loop
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(crate::github::fetch_all_comment_threads(&pr_info));
+
+            let _ = tx.send(result.map_err(|e| e.to_string()));
+        });
     }
 
     /// Build lookup map from (file, line) to thread indices
     fn build_line_to_threads_map(&mut self, threads: &[CommentThread]) {
+        // Clear and shrink to prevent unbounded growth
         self.line_to_threads.clear();
+        self.line_to_threads.shrink_to_fit();
+
+        // Reserve capacity based on expected size
+        self.line_to_threads.reserve(threads.len());
+
         for (idx, thread) in threads.iter().enumerate() {
             if let (Some(path), Some(line)) = (&thread.file_path, thread.line) {
                 self.line_to_threads

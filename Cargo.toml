@@ -23,7 +23,7 @@ serde_json = "1"
 chrono = "0.4"
 
 # Async for subprocess
-tokio = { version = "1", features = ["process", "rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["process", "rt-multi-thread", "macros", "io-util"] }
 
 # Error handling
 anyhow = "1"

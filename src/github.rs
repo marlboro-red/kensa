@@ -327,21 +327,38 @@ async fn submit_inline_comments_batch(pr: &PrInfo, comments: &[&PendingComment],
         })
         .collect();
 
-    let comments_json = serde_json::to_string(&review_comments)
-        .context("Failed to serialize comments")?;
+    // Build the complete request body as JSON
+    let request_body = serde_json::json!({
+        "commit_id": commit_id,
+        "event": "COMMENT",
+        "comments": review_comments
+    });
 
-    // Use Review API to submit all comments in one request
-    let output = Command::new("gh")
+    let body_json = serde_json::to_string(&request_body)
+        .context("Failed to serialize request body")?;
+
+    // Use Review API with --input to send proper JSON body
+    let mut child = Command::new("gh")
         .args([
             "api",
             &format!("repos/{}/pulls/{}/reviews", repo, pr.number),
-            "-f", &format!("commit_id={}", commit_id),
-            "-f", "event=COMMENT",
-            "-f", &format!("comments={}", comments_json),
+            "--input", "-",
         ])
-        .output()
-        .await
-        .context("Failed to submit review")?;
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn gh command")?;
+
+    // Write the JSON body to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        stdin.write_all(body_json.as_bytes()).await
+            .context("Failed to write to gh stdin")?;
+    }
+
+    let output = child.wait_with_output().await
+        .context("Failed to wait for gh command")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
