@@ -22,8 +22,20 @@ cargo install --path .
 
 ## Updating
 
+kensa automatically checks for updates once per day and will notify you if a new version is available.
+
+To check for updates and upgrade:
+
 ```bash
-cargo install --git https://github.com/marlboro-red/kensa --force
+kensa --upgrade
+```
+
+If an update is available, you'll be prompted to install it automatically.
+
+To disable automatic upgrade checks:
+
+```bash
+kensa --no-upgrade-check
 ```
 
 ## Usage
@@ -81,6 +93,7 @@ kensa https://github.com/owner/repo/pull/123
 - Batch comment submission (single API call)
 - File tree navigation
 - Vim-style keybindings
+- Automatic update notifications
 
 ## License
 

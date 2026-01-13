@@ -4,6 +4,7 @@ mod parser;
 mod syntax;
 mod types;
 mod ui;
+mod update;
 
 use anyhow::Result;
 use clap::Parser;
@@ -11,6 +12,7 @@ use clap::Parser;
 use crate::github::{check_gh_cli, fetch_my_prs, fetch_pr_diff, fetch_review_prs, parse_pr_url};
 use crate::parser::parse_diff;
 use crate::ui::App;
+use crate::update::check_for_update;
 
 const LOGO: &str = r#"
   検査
@@ -21,18 +23,109 @@ const LOGO: &str = r#"
 #[command(name = "kensa")]
 #[command(about = "A fast TUI for reviewing GitHub PRs")]
 #[command(version)]
+#[command(after_help = "\
+EXAMPLES:
+    kensa                                         List PRs awaiting your review
+    kensa https://github.com/owner/repo/pull/123  Open a specific PR
+    kensa --upgrade                               Check for updates
+
+KEY BINDINGS:
+    PR List:
+        j/k         Navigate up/down
+        Enter       Open PR diff
+        Tab         Switch between 'For Review' / 'My PRs'
+        r           Refresh list
+        q           Quit
+
+    Diff View:
+        j/k         Scroll diff
+        h/l         Previous/next file
+        Tab         Toggle file tree
+        /           Search files
+        c           Comment on current line
+        v           Visual mode (select lines for multi-line comment)
+        t           View comment threads
+        p           View pending comments
+        S           Submit review
+        o           Open PR in browser
+        ?           Show help
+        q           Back to PR list
+
+    Comments:
+        Ctrl+S      Save comment
+        Esc         Cancel
+
+REQUIREMENTS:
+    GitHub CLI (gh) must be installed and authenticated.
+    Install: https://cli.github.com/
+")]
 struct Args {
-    /// GitHub PR URL (e.g., https://github.com/owner/repo/pull/123)
-    /// If not provided, shows PRs awaiting your review
+    /// GitHub PR URL (e.g., https://github.com/owner/repo/pull/123).
+    /// If not provided, shows PRs awaiting your review.
     pr_url: Option<String>,
+
+    /// Disable automatic upgrade check on startup
+    #[arg(long)]
+    no_upgrade_check: bool,
+
+    /// Check for updates and exit
+    #[arg(long)]
+    upgrade: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Handle --upgrade: check for updates and exit
+    if args.upgrade {
+        eprintln!("Checking for updates...");
+        if let Some(update_msg) = check_for_update(true).await {
+            eprintln!("\x1b[33m{}\x1b[0m", update_msg);
+            eprint!("\nUpgrade now? [Y/n] ");
+            use std::io::Write;
+            let _ = std::io::stderr().flush();
+
+            // Read user input (default is yes)
+            let mut input = String::new();
+            if std::io::stdin().read_line(&mut input).is_ok() {
+                let input = input.trim().to_lowercase();
+                if input.is_empty() || input == "y" || input == "yes" {
+                    eprintln!("\nUpgrading...\n");
+                    let status = std::process::Command::new("cargo")
+                        .args(["install", "--git", "https://github.com/marlboro-red/kensa", "--force"])
+                        .status();
+
+                    match status {
+                        Ok(s) if s.success() => {
+                            eprintln!("\n\x1b[32mUpgrade complete!\x1b[0m");
+                        }
+                        Ok(_) => {
+                            eprintln!("\n\x1b[31mUpgrade failed.\x1b[0m");
+                        }
+                        Err(e) => {
+                            eprintln!("\n\x1b[31mFailed to run cargo: {}\x1b[0m", e);
+                        }
+                    }
+                } else {
+                    eprintln!("Upgrade cancelled.");
+                }
+            }
+        } else {
+            eprintln!("Already up to date (v{})", update::VERSION);
+        }
+        return Ok(());
+    }
+
     // Show logo
     eprintln!("{}", LOGO);
+
+    // Check for updates (unless disabled)
+    if !args.no_upgrade_check {
+        if let Some(update_msg) = check_for_update(false).await {
+            eprintln!("\x1b[33m{}\x1b[0m\n", update_msg); // Yellow color
+        }
+    }
 
     // Check gh CLI is available
     check_gh_cli().await?;
