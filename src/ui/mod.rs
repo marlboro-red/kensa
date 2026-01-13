@@ -19,6 +19,7 @@ use ratatui::widgets::{
 };
 use ratatui::Terminal;
 
+use crate::config::Config;
 use crate::syntax::Highlighter;
 use crate::types::{CommentThread, DiffFile, LineKind, PendingComment, ReviewPr};
 
@@ -179,6 +180,7 @@ pub struct App {
     pub view_mode: ViewMode,
     pub collapsed: HashSet<usize>,
     pub highlighter: Highlighter,
+    pub config: Config,
     focus: Focus,
     should_quit: bool,
     tree_scroll: usize,
@@ -252,6 +254,7 @@ impl App {
             view_mode: ViewMode::Unified,
             collapsed: HashSet::new(),
             highlighter: Highlighter::new(),
+            config: Config::load(),
             focus: Focus::Tree,
             should_quit: false,
             tree_scroll: 0,
@@ -341,6 +344,7 @@ impl App {
             view_mode: ViewMode::Unified,
             collapsed: HashSet::new(),
             highlighter: Highlighter::new(),
+            config: Config::load(),
             focus: Focus::Tree,
             should_quit: false,
             tree_scroll: 0,
@@ -4470,13 +4474,16 @@ impl App {
                     let content_start_x = area.x + gutter_width as u16 + 2; // +2 for indicator space
                     let max_x = area.x + area.width;
 
+                    // Expand tabs based on config
+                    let expanded_content = self.config.expand_tabs(content, &file.path);
+
                     // Apply horizontal scroll - skip first N characters
                     let h_scroll = self.horizontal_scroll;
 
                     // First render raw content as fallback (in case spans don't cover everything)
                     let default_style = Style::default().fg(Color::White).bg(bg);
                     let mut x_offset = content_start_x;
-                    for (char_idx, ch) in content.chars().enumerate() {
+                    for (char_idx, ch) in expanded_content.chars().enumerate() {
                         if char_idx < h_scroll {
                             continue;  // Skip scrolled characters
                         }
@@ -4488,7 +4495,7 @@ impl App {
                     }
 
                     // Then overlay syntax highlighted spans
-                    let highlighted = self.highlighter.highlight_line(content, &file.path);
+                    let highlighted = self.highlighter.highlight_line(&expanded_content, &file.path);
                     x_offset = content_start_x;
                     let mut char_idx = 0usize;
 
@@ -4697,13 +4704,16 @@ impl App {
 
         let content_start_x = x + gutter_len + 2; // +2 for indicator space
 
+        // Expand tabs based on config
+        let expanded_content = self.config.expand_tabs(content, path);
+
         // Apply horizontal scroll - skip first N characters
         let h_scroll = self.horizontal_scroll;
 
         // First render raw content as fallback (in case spans don't cover everything)
         let default_style = Style::default().fg(Color::White).bg(bg);
         let mut x_offset = content_start_x;
-        for (char_idx, ch) in content.chars().enumerate() {
+        for (char_idx, ch) in expanded_content.chars().enumerate() {
             if char_idx < h_scroll {
                 continue;  // Skip scrolled characters
             }
@@ -4715,7 +4725,7 @@ impl App {
         }
 
         // Then overlay syntax highlighted spans
-        let highlighted = self.highlighter.highlight_line(content, path);
+        let highlighted = self.highlighter.highlight_line(&expanded_content, path);
         x_offset = content_start_x;
         let mut char_idx = 0usize;
 
