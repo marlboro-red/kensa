@@ -2799,20 +2799,37 @@ impl App {
 
         frame.render_widget(block, popup_area);
 
-        // Render the text with cursor
-        let display_text = format!("{}_", text);
-        let lines: Vec<&str> = display_text.lines().collect();
+        // Render the text with word wrapping and cursor
+        let wrap_width = inner_area.width.saturating_sub(1) as usize;
+        let mut wrapped_lines: Vec<String> = Vec::new();
+
+        // Wrap each line of the input text
+        for line in text.lines() {
+            if line.is_empty() {
+                wrapped_lines.push(String::new());
+            } else {
+                wrapped_lines.extend(Self::wrap_text(line, wrap_width));
+            }
+        }
+        // Handle case where text ends with newline or is empty
+        if text.is_empty() || text.ends_with('\n') {
+            wrapped_lines.push(String::new());
+        }
+
+        // Add cursor to the last line
+        if let Some(last) = wrapped_lines.last_mut() {
+            last.push('_');
+        }
 
         let buf = frame.buffer_mut();
-        for (i, line) in lines.iter().enumerate() {
+        for (i, line) in wrapped_lines.iter().enumerate() {
             if i as u16 >= inner_area.height {
                 break;
             }
-            let truncated: String = line.chars().take(inner_area.width as usize).collect();
             buf.set_string(
                 inner_area.x,
                 inner_area.y + i as u16,
-                &truncated,
+                line,
                 Style::default().fg(Color::White).bg(Color::Rgb(40, 40, 50)),
             );
         }
@@ -3167,17 +3184,34 @@ impl App {
 
         frame.render_widget(block, popup_area);
 
-        let display_text = format!("{}_", text);
+        // Render the text with word wrapping and cursor
+        let wrap_width = inner_area.width.saturating_sub(1) as usize;
+        let mut wrapped_lines: Vec<String> = Vec::new();
+
+        for line in text.lines() {
+            if line.is_empty() {
+                wrapped_lines.push(String::new());
+            } else {
+                wrapped_lines.extend(Self::wrap_text(line, wrap_width));
+            }
+        }
+        if text.is_empty() || text.ends_with('\n') {
+            wrapped_lines.push(String::new());
+        }
+
+        if let Some(last) = wrapped_lines.last_mut() {
+            last.push('_');
+        }
+
         let buf = frame.buffer_mut();
-        for (i, line) in display_text.lines().enumerate() {
+        for (i, line) in wrapped_lines.iter().enumerate() {
             if i as u16 >= inner_area.height {
                 break;
             }
-            let truncated: String = line.chars().take(inner_area.width as usize).collect();
             buf.set_string(
                 inner_area.x,
                 inner_area.y + i as u16,
-                &truncated,
+                line,
                 Style::default().fg(Color::White).bg(Color::Rgb(40, 50, 40)),
             );
         }
@@ -3307,15 +3341,7 @@ impl App {
             }
         }
 
-        // Render comment text
-        let display_text = if editing_body {
-            format!("{}_", body)
-        } else if body.is_empty() {
-            "(no comment)".to_string()
-        } else {
-            body.to_string()
-        };
-
+        // Render comment text with word wrapping
         let text_style = if editing_body {
             Style::default().fg(Color::White).bg(body_bg)
         } else if body.is_empty() {
@@ -3324,13 +3350,39 @@ impl App {
             Style::default().fg(Color::Gray).bg(body_bg)
         };
 
-        for (i, line) in display_text.lines().enumerate() {
-            let y = body_start_y + i as u16;
-            if y >= body_start_y + body_height || y >= inner_area.y + inner_area.height - 4 {
-                break;
+        let wrap_width = inner_area.width.saturating_sub(3) as usize;
+
+        if body.is_empty() && !editing_body {
+            // Show placeholder
+            buf.set_string(inner_area.x + 1, body_start_y, "(no comment)", text_style);
+        } else {
+            // Wrap and render comment text
+            let mut wrapped_lines: Vec<String> = Vec::new();
+            for line in body.lines() {
+                if line.is_empty() {
+                    wrapped_lines.push(String::new());
+                } else {
+                    wrapped_lines.extend(Self::wrap_text(line, wrap_width));
+                }
             }
-            let truncated: String = line.chars().take(inner_area.width as usize - 2).collect();
-            buf.set_string(inner_area.x + 1, y, &truncated, text_style);
+            if body.is_empty() || body.ends_with('\n') {
+                wrapped_lines.push(String::new());
+            }
+
+            // Add cursor if editing
+            if editing_body {
+                if let Some(last) = wrapped_lines.last_mut() {
+                    last.push('_');
+                }
+            }
+
+            for (i, line) in wrapped_lines.iter().enumerate() {
+                let y = body_start_y + i as u16;
+                if y >= body_start_y + body_height || y >= inner_area.y + inner_area.height - 2 {
+                    break;
+                }
+                buf.set_string(inner_area.x + 1, y, line, text_style);
+            }
         }
 
         // Show draft comments count with 'd' to review
@@ -3530,34 +3582,27 @@ impl App {
             .unwrap_or_else(|_| iso_time.to_string())
     }
 
-    /// Simple word wrapping for text
+    /// Character-based text wrapping - breaks at width boundary
     fn wrap_text(text: &str, width: usize) -> Vec<String> {
+        if width == 0 {
+            return vec![text.to_string()];
+        }
+
         let mut lines = Vec::new();
-        for line in text.lines() {
-            if line.len() <= width {
-                lines.push(line.to_string());
-            } else {
-                let mut current = String::new();
-                for word in line.split_whitespace() {
-                    if current.len() + word.len() + 1 > width {
-                        if !current.is_empty() {
-                            lines.push(current);
-                            current = String::new();
-                        }
-                    }
-                    if !current.is_empty() {
-                        current.push(' ');
-                    }
-                    current.push_str(word);
-                }
-                if !current.is_empty() {
-                    lines.push(current);
-                }
-            }
+        let chars: Vec<char> = text.chars().collect();
+
+        if chars.is_empty() {
+            return vec![String::new()];
         }
-        if lines.is_empty() {
-            lines.push(String::new());
+
+        let mut i = 0;
+        while i < chars.len() {
+            let end = (i + width).min(chars.len());
+            let line: String = chars[i..end].iter().collect();
+            lines.push(line);
+            i = end;
         }
+
         lines
     }
 
