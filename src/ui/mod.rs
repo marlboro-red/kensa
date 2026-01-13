@@ -175,6 +175,7 @@ pub struct App {
     pub files: Vec<DiffFile>,
     pub selected_file: usize,
     pub scroll_offset: usize,
+    pub horizontal_scroll: usize,  // Horizontal scroll offset for long lines
     pub view_mode: ViewMode,
     pub collapsed: HashSet<usize>,
     pub highlighter: Highlighter,
@@ -247,6 +248,7 @@ impl App {
             files,
             selected_file: 0,
             scroll_offset: 0,
+            horizontal_scroll: 0,
             view_mode: ViewMode::Unified,
             collapsed: HashSet::new(),
             highlighter: Highlighter::new(),
@@ -333,6 +335,7 @@ impl App {
             files: Vec::new(),
             selected_file: 0,
             scroll_offset: 0,
+            horizontal_scroll: 0,
             view_mode: ViewMode::Unified,
             collapsed: HashSet::new(),
             highlighter: Highlighter::new(),
@@ -1372,6 +1375,8 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => self.move_up(),
             KeyCode::Char('h') | KeyCode::Left => self.prev_file(),
             KeyCode::Char('l') | KeyCode::Right => self.next_file(),
+            KeyCode::Char('H') => self.scroll_left(),
+            KeyCode::Char('L') => self.scroll_right(),
             KeyCode::Enter | KeyCode::Tab => self.toggle_focus(),
             KeyCode::Char('d') => self.toggle_view_mode(),
             KeyCode::Char('x') => self.toggle_collapse(),
@@ -1968,6 +1973,7 @@ impl App {
         self.selected_file = index;
         self.selected_tree_item = None;
         self.scroll_offset = 0;
+        self.horizontal_scroll = 0;
         self.diff_cursor = 0;
         self.visual_mode = false;
         self.selection_anchor = 0;
@@ -2204,6 +2210,14 @@ impl App {
         }
     }
 
+    fn scroll_left(&mut self) {
+        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(10);
+    }
+
+    fn scroll_right(&mut self) {
+        self.horizontal_scroll = self.horizontal_scroll.saturating_add(10);
+    }
+
     fn scroll_half_page_up(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_sub(15);
     }
@@ -2247,7 +2261,7 @@ impl App {
         let popup_width = 60.min(area.width.saturating_sub(4));
         let popup_height = match self.help_mode {
             HelpMode::PrList => 18,
-            HelpMode::DiffView => 28,  // Increased for thread commands
+            HelpMode::DiffView => 30,  // Increased for horizontal scroll commands
             HelpMode::None => return,
         };
         let popup_height = popup_height.min(area.height.saturating_sub(4));
@@ -2298,6 +2312,8 @@ impl App {
                 ("k / ↑", "Move cursor up"),
                 ("h / ←", "Previous file"),
                 ("l / →", "Next file"),
+                ("H", "Scroll left (long lines)"),
+                ("L", "Scroll right (long lines)"),
                 ("Tab / Enter", "Toggle focus (tree/diff)"),
                 ("g", "Go to top"),
                 ("G", "Go to bottom"),
@@ -3973,10 +3989,16 @@ impl App {
                     let content_start_x = area.x + gutter_width as u16 + 2;  // +2 for indicator space
                     let max_x = area.x + area.width;
 
+                    // Apply horizontal scroll - skip first N characters
+                    let h_scroll = self.horizontal_scroll;
+
                     // First render raw content as fallback (in case spans don't cover everything)
                     let default_style = Style::default().fg(Color::White).bg(bg);
                     let mut x_offset = content_start_x;
-                    for ch in content.chars() {
+                    for (char_idx, ch) in content.chars().enumerate() {
+                        if char_idx < h_scroll {
+                            continue;  // Skip scrolled characters
+                        }
                         if x_offset >= max_x {
                             break;
                         }
@@ -3987,15 +4009,21 @@ impl App {
                     // Then overlay syntax highlighted spans
                     let highlighted = self.highlighter.highlight_line(content, &file.path);
                     x_offset = content_start_x;
+                    let mut char_idx = 0usize;
 
                     for span in highlighted.spans {
                         let span_style = span.style.bg(bg);
                         for ch in span.content.chars() {
+                            if char_idx < h_scroll {
+                                char_idx += 1;
+                                continue;  // Skip scrolled characters
+                            }
                             if x_offset >= max_x {
                                 break;
                             }
                             buf.set_string(x_offset, y, &ch.to_string(), span_style);
                             x_offset += 1;
+                            char_idx += 1;
                         }
                     }
                 }
@@ -4184,10 +4212,16 @@ impl App {
 
         let content_start_x = x + gutter_len + 2;  // +2 for indicator space
 
+        // Apply horizontal scroll - skip first N characters
+        let h_scroll = self.horizontal_scroll;
+
         // First render raw content as fallback (in case spans don't cover everything)
         let default_style = Style::default().fg(Color::White).bg(bg);
         let mut x_offset = content_start_x;
-        for ch in content.chars() {
+        for (char_idx, ch) in content.chars().enumerate() {
+            if char_idx < h_scroll {
+                continue;  // Skip scrolled characters
+            }
             if x_offset >= max_x {
                 break;
             }
@@ -4198,15 +4232,21 @@ impl App {
         // Then overlay syntax highlighted spans
         let highlighted = self.highlighter.highlight_line(content, path);
         x_offset = content_start_x;
+        let mut char_idx = 0usize;
 
         for span in highlighted.spans {
             let span_style = span.style.bg(bg);
             for ch in span.content.chars() {
+                if char_idx < h_scroll {
+                    char_idx += 1;
+                    continue;  // Skip scrolled characters
+                }
                 if x_offset >= max_x {
                     break;
                 }
                 buf.set_string(x_offset, y, &ch.to_string(), span_style);
                 x_offset += 1;
+                char_idx += 1;
             }
         }
     }
