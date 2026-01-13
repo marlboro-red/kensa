@@ -218,6 +218,10 @@ pub struct App {
     comment_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,
     reply_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>, // thread_index on success
     review_submit_receiver: Option<mpsc::Receiver<Result<(String, usize), String>>>, // (review action, comments count) on success
+
+    // Cached tree structure to avoid rebuilding on every navigation
+    cached_tree: Option<Vec<TreeNode>>,
+    cached_flat_items: Option<Vec<TreeItem>>,
 }
 
 impl App {
@@ -283,6 +287,9 @@ impl App {
             comment_submit_receiver: None,
             reply_submit_receiver: None,
             review_submit_receiver: None,
+
+            cached_tree: None,
+            cached_flat_items: None,
         }
     }
 
@@ -372,6 +379,9 @@ impl App {
             comment_submit_receiver: None,
             reply_submit_receiver: None,
             review_submit_receiver: None,
+
+            cached_tree: None,
+            cached_flat_items: None,
         }
     }
 
@@ -407,8 +417,30 @@ impl App {
     // Tree Building
     // ========================================================================
 
+    /// Invalidate the tree cache (call when files or filters change)
+    fn invalidate_tree_cache(&mut self) {
+        self.cached_tree = None;
+        self.cached_flat_items = None;
+    }
+
+    /// Get cached flat items for navigation (builds and caches if needed)
+    fn get_cached_flat_items(&mut self) -> Vec<TreeItem> {
+        if self.cached_flat_items.is_none() {
+            let tree = self.build_tree_internal();
+            let flat_items = self.flatten_tree(&tree);
+            self.cached_tree = Some(tree);
+            self.cached_flat_items = Some(flat_items);
+        }
+        self.cached_flat_items.clone().unwrap_or_default()
+    }
+
     /// Build a tree structure from the flat file list
     fn build_tree(&self) -> Vec<TreeNode> {
+        self.build_tree_internal()
+    }
+
+    /// Internal tree building (used by both cached and uncached paths)
+    fn build_tree_internal(&self) -> Vec<TreeNode> {
         let mut root: HashMap<String, TreeNode> = HashMap::new();
 
         // Only include filtered files
@@ -669,6 +701,7 @@ impl App {
                             self.collapsed.clear();
                             self.collapsed_folders.clear();
                             self.selected_tree_item = None;
+                            self.invalidate_tree_cache(); // Cache invalidated when files change
                             self.screen = Screen::DiffView;
                             self.loading = LoadingState::Idle;
                             // Store head SHA for optimized comment submission
@@ -1933,14 +1966,19 @@ impl App {
         });
     }
 
-    /// Save current drafts to disk
+    /// Save current drafts to disk (non-blocking)
+    /// Spawns a background thread to avoid blocking the UI during file I/O
     fn save_current_drafts(&self) {
         if let Some(ref pr) = self.current_pr {
             let pr_info = pr.to_pr_info();
-            if let Err(e) = crate::drafts::save_drafts(&pr_info, &self.pending_comments) {
-                // Silently ignore save errors - drafts are best-effort
-                eprintln!("Warning: Failed to save drafts: {}", e);
-            }
+            let comments = self.pending_comments.clone();
+            // Spawn background thread for file I/O to avoid blocking UI
+            std::thread::spawn(move || {
+                if let Err(e) = crate::drafts::save_drafts(&pr_info, &comments) {
+                    // Silently ignore save errors - drafts are best-effort
+                    eprintln!("Warning: Failed to save drafts: {}", e);
+                }
+            });
         }
     }
 
@@ -2051,6 +2089,8 @@ impl App {
         }
         // Reset tree scroll
         self.tree_scroll = 0;
+        // Invalidate tree cache when filter changes
+        self.invalidate_tree_cache();
     }
 
     /// Get line info at the current cursor position for inline comments
@@ -2191,8 +2231,8 @@ impl App {
     }
 
     fn move_to_next_tree_item(&mut self) {
-        let tree = self.build_tree();
-        let flat_items = self.flatten_tree(&tree);
+        // Use cached flat items to avoid rebuilding tree on every navigation
+        let flat_items = self.get_cached_flat_items();
 
         if flat_items.is_empty() {
             return;
@@ -2222,8 +2262,8 @@ impl App {
     }
 
     fn move_to_prev_tree_item(&mut self) {
-        let tree = self.build_tree();
-        let flat_items = self.flatten_tree(&tree);
+        // Use cached flat items to avoid rebuilding tree on every navigation
+        let flat_items = self.get_cached_flat_items();
 
         if flat_items.is_empty() {
             return;
@@ -2253,8 +2293,8 @@ impl App {
     }
 
     fn move_to_next_file_only(&mut self) {
-        let tree = self.build_tree();
-        let flat_items = self.flatten_tree(&tree);
+        // Use cached flat items to avoid rebuilding tree on every navigation
+        let flat_items = self.get_cached_flat_items();
 
         // Find current position
         let current_pos = flat_items
@@ -2277,8 +2317,8 @@ impl App {
     }
 
     fn move_to_prev_file_only(&mut self) {
-        let tree = self.build_tree();
-        let flat_items = self.flatten_tree(&tree);
+        // Use cached flat items to avoid rebuilding tree on every navigation
+        let flat_items = self.get_cached_flat_items();
 
         // Find current position
         let current_pos = flat_items
@@ -2327,6 +2367,8 @@ impl App {
             } else {
                 self.collapsed_folders.insert(folder_path.clone());
             }
+            // Invalidate tree cache when folder collapse state changes
+            self.invalidate_tree_cache();
         } else {
             // File is selected - toggle file collapse in diff view
             if self.collapsed.contains(&self.selected_file) {
