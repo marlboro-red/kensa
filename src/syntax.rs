@@ -98,24 +98,6 @@ impl Highlighter {
         }
     }
 
-    /// Highlight multiple lines at once (more efficient for batch operations)
-    /// This uses a single HighlightLines instance for all lines, properly maintaining
-    /// syntax state across lines for multi-line constructs.
-    pub fn highlight_lines(&self, lines: &[&str], path: &str) -> Vec<Line<'static>> {
-        let syntax = self.get_syntax(path);
-        let theme = self.get_theme();
-        let mut highlighter = HighlightLines::new(syntax, theme);
-
-        lines
-            .iter()
-            .map(|content| {
-                match highlighter.highlight_line(content, &self.syntax_set) {
-                    Ok(ranges) => Line::from(Self::convert_to_spans(ranges)),
-                    Err(_) => Line::from(content.to_string()),
-                }
-            })
-            .collect()
-    }
 }
 
 impl Default for Highlighter {
