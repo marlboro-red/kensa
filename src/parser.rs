@@ -1,6 +1,16 @@
+use std::sync::OnceLock;
+
 use regex::Regex;
 
 use crate::types::{DiffFile, DiffLine, FileStatus, Hunk, LineKind};
+
+/// Get the hunk header regex (compiled once)
+fn hunk_regex() -> &'static Regex {
+    static HUNK_RE: OnceLock<Regex> = OnceLock::new();
+    HUNK_RE.get_or_init(|| {
+        Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").unwrap()
+    })
+}
 
 /// Parse a unified diff string into structured DiffFile objects
 pub fn parse_diff(diff: &str) -> Vec<DiffFile> {
@@ -110,8 +120,7 @@ fn parse_hunk(lines: &[&str]) -> Option<(Hunk, usize)> {
     let header = lines[0].to_string();
 
     // Parse @@ -old_start,old_count +new_start,new_count @@ optional context
-    let hunk_re = Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").unwrap();
-    let caps = hunk_re.captures(&header)?;
+    let caps = hunk_regex().captures(&header)?;
 
     let old_start: u32 = caps.get(1)?.as_str().parse().ok()?;
     let _old_count: u32 = caps.get(2).map_or(1, |m| m.as_str().parse().unwrap_or(1));
