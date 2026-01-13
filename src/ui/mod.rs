@@ -56,12 +56,6 @@ enum TreeItem {
     },
 }
 
-const BG_COLOR: Color = Color::Rgb(22, 22, 22);
-const DEL_BG: Color = Color::Rgb(60, 30, 30);
-const ADD_BG: Color = Color::Rgb(30, 60, 30);
-const CURSOR_BG: Color = Color::Rgb(45, 45, 65); // Highlight for cursor line
-const CURSOR_GUTTER: Color = Color::Rgb(100, 100, 180); // Brighter gutter for cursor
-
 /// Which screen is currently active
 #[derive(Clone, PartialEq, Eq)]
 pub enum Screen {
@@ -226,6 +220,13 @@ impl App {
     /// Create app in diff view mode (for direct PR URL)
     pub fn new(files: Vec<DiffFile>) -> Self {
         let file_count = files.len();
+        let config = Config::load();
+        let view_mode = if config.is_split_view_default() {
+            ViewMode::Split
+        } else {
+            ViewMode::Unified
+        };
+        let highlighter = Highlighter::with_min_brightness(config.display.min_brightness);
         Self {
             screen: Screen::DiffView,
             loading: LoadingState::Idle,
@@ -251,10 +252,10 @@ impl App {
             selected_file: 0,
             scroll_offset: 0,
             horizontal_scroll: 0,
-            view_mode: ViewMode::Unified,
+            view_mode,
             collapsed: HashSet::new(),
-            highlighter: Highlighter::new(),
-            config: Config::load(),
+            highlighter,
+            config,
             focus: Focus::Tree,
             should_quit: false,
             tree_scroll: 0,
@@ -316,6 +317,14 @@ impl App {
             .collect();
         repos.sort();
 
+        let config = Config::load();
+        let view_mode = if config.is_split_view_default() {
+            ViewMode::Split
+        } else {
+            ViewMode::Unified
+        };
+        let highlighter = Highlighter::with_min_brightness(config.display.min_brightness);
+
         Self {
             screen: Screen::PrList,
             loading: LoadingState::Idle,
@@ -341,10 +350,10 @@ impl App {
             selected_file: 0,
             scroll_offset: 0,
             horizontal_scroll: 0,
-            view_mode: ViewMode::Unified,
+            view_mode,
             collapsed: HashSet::new(),
-            highlighter: Highlighter::new(),
-            config: Config::load(),
+            highlighter,
+            config,
             focus: Focus::Tree,
             should_quit: false,
             tree_scroll: 0,
@@ -377,6 +386,40 @@ impl App {
             reply_submit_receiver: None,
             review_submit_receiver: None,
         }
+    }
+
+    // ========================================================================
+    // Config Color Helpers
+    // ========================================================================
+
+    /// Get the background color for context lines
+    fn bg_color(&self) -> Color {
+        let c = &self.config.colors.context_bg;
+        Color::Rgb(c.r, c.g, c.b)
+    }
+
+    /// Get the background color for deleted lines
+    fn del_bg(&self) -> Color {
+        let c = &self.config.colors.del_bg;
+        Color::Rgb(c.r, c.g, c.b)
+    }
+
+    /// Get the background color for added lines
+    fn add_bg(&self) -> Color {
+        let c = &self.config.colors.add_bg;
+        Color::Rgb(c.r, c.g, c.b)
+    }
+
+    /// Get the background color for cursor line
+    fn cursor_bg(&self) -> Color {
+        let c = &self.config.colors.cursor_bg;
+        Color::Rgb(c.r, c.g, c.b)
+    }
+
+    /// Get the gutter color for cursor line
+    fn cursor_gutter(&self) -> Color {
+        let c = &self.config.colors.cursor_gutter;
+        Color::Rgb(c.r, c.g, c.b)
     }
 
     // ========================================================================
@@ -2352,18 +2395,22 @@ impl App {
     }
 
     fn scroll_left(&mut self) {
-        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(10);
+        let amount = self.config.navigation.horizontal_scroll_columns;
+        self.horizontal_scroll = self.horizontal_scroll.saturating_sub(amount);
     }
 
     fn scroll_right(&mut self) {
-        self.horizontal_scroll = self.horizontal_scroll.saturating_add(10);
+        let amount = self.config.navigation.horizontal_scroll_columns;
+        self.horizontal_scroll = self.horizontal_scroll.saturating_add(amount);
     }
 
     fn scroll_half_page_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(15);
+        let amount = self.config.navigation.scroll_lines;
+        self.scroll_offset = self.scroll_offset.saturating_sub(amount);
     }
     fn scroll_half_page_down(&mut self) {
-        self.scroll_offset += 15;
+        let amount = self.config.navigation.scroll_lines;
+        self.scroll_offset += amount;
     }
 
     fn render(&self, frame: &mut ratatui::Frame) {
@@ -2915,9 +2962,10 @@ impl App {
             buf.set_string(area.x, area.y + 1, nav_hint, hint_style);
 
             // Render diff content in remaining area
+            let tree_width = self.config.navigation.tree_width;
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(45), Constraint::Min(0)])
+                .constraints([Constraint::Length(tree_width), Constraint::Min(0)])
                 .split(content_area);
 
             self.render_tree(frame, chunks[0]);
@@ -2927,9 +2975,10 @@ impl App {
             self.render_comment_overlay(frame, area);
         } else {
             // Direct PR URL mode - no header needed
+            let tree_width = self.config.navigation.tree_width;
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(45), Constraint::Min(0)])
+                .constraints([Constraint::Length(tree_width), Constraint::Min(0)])
                 .split(area);
 
             self.render_tree(frame, chunks[0]);
@@ -4235,7 +4284,7 @@ impl App {
     fn render_diff(&self, frame: &mut ratatui::Frame, area: Rect) {
         // First, fill the ENTIRE area with background color directly in the buffer
         let buf = frame.buffer_mut();
-        fill_area(buf, area, BG_COLOR);
+        fill_area(buf, area, self.bg_color());
 
         let Some(file) = self.files.get(self.selected_file) else {
             let block = Block::default()
@@ -4273,7 +4322,7 @@ impl App {
         }
 
         // Fill inner area with background
-        fill_area(frame.buffer_mut(), inner_area, BG_COLOR);
+        fill_area(frame.buffer_mut(), inner_area, self.bg_color());
 
         match self.view_mode {
             ViewMode::Unified => self.render_unified_direct(frame.buffer_mut(), inner_area, file),
@@ -4336,9 +4385,9 @@ impl App {
                     let bg = if is_in_selection {
                         Color::Rgb(60, 60, 90) // Selection highlight
                     } else if is_cursor_line {
-                        CURSOR_BG
+                        self.cursor_bg()
                     } else {
-                        BG_COLOR
+                        self.bg_color()
                     };
 
                     // Cursor marker
@@ -4350,7 +4399,7 @@ impl App {
                     let marker_style = if is_cursor_line {
                         Style::default()
                             .fg(Color::Yellow)
-                            .bg(CURSOR_GUTTER)
+                            .bg(self.cursor_gutter())
                             .add_modifier(Modifier::BOLD)
                     } else if is_in_selection {
                         Style::default().fg(Color::Cyan).bg(Color::Rgb(60, 60, 90))
@@ -4377,9 +4426,9 @@ impl App {
                     content,
                 } => {
                     let base_bg = match kind {
-                        LineKind::Add => ADD_BG,
-                        LineKind::Del => DEL_BG,
-                        LineKind::Context => BG_COLOR,
+                        LineKind::Add => self.add_bg(),
+                        LineKind::Del => self.del_bg(),
+                        LineKind::Context => self.bg_color(),
                     };
                     // Blend highlight with line background
                     let bg = if is_in_selection {
@@ -4392,7 +4441,7 @@ impl App {
                         match kind {
                             LineKind::Add => Color::Rgb(40, 80, 50),
                             LineKind::Del => Color::Rgb(80, 40, 50),
-                            _ => CURSOR_BG,
+                            _ => self.cursor_bg(),
                         }
                     } else {
                         base_bg
@@ -4425,7 +4474,7 @@ impl App {
                     let marker_style = if is_cursor_line {
                         Style::default()
                             .fg(Color::Yellow)
-                            .bg(CURSOR_GUTTER)
+                            .bg(self.cursor_gutter())
                             .add_modifier(Modifier::BOLD)
                     } else if is_in_selection {
                         Style::default().fg(Color::Cyan).bg(Color::Rgb(60, 60, 90))
@@ -4441,7 +4490,7 @@ impl App {
                     let gutter_style = if is_cursor_line {
                         Style::default()
                             .fg(Color::White)
-                            .bg(CURSOR_GUTTER)
+                            .bg(self.cursor_gutter())
                             .add_modifier(Modifier::BOLD)
                     } else if is_in_selection {
                         Style::default().fg(Color::White).bg(Color::Rgb(60, 60, 90))
@@ -4636,7 +4685,7 @@ impl App {
             None => {
                 // Empty line - fill with background
                 for cx in x..max_x {
-                    buf.set_string(cx, y, " ", Style::default().bg(BG_COLOR));
+                    buf.set_string(cx, y, " ", Style::default().bg(self.bg_color()));
                 }
             }
             Some(SplitLine::Hunk(header)) => {
@@ -4648,17 +4697,17 @@ impl App {
                     Style::default()
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::DIM)
-                        .bg(BG_COLOR),
+                        .bg(self.bg_color()),
                 );
             }
             Some(SplitLine::Del { ln, content }) => {
-                self.render_split_content_line(buf, x, y, width, *ln, content, DEL_BG, path);
+                self.render_split_content_line(buf, x, y, width, *ln, content, self.del_bg(), path);
             }
             Some(SplitLine::Add { ln, content }) => {
-                self.render_split_content_line(buf, x, y, width, *ln, content, ADD_BG, path);
+                self.render_split_content_line(buf, x, y, width, *ln, content, self.add_bg(), path);
             }
             Some(SplitLine::Context { ln, content }) => {
-                self.render_split_content_line(buf, x, y, width, *ln, content, BG_COLOR, path);
+                self.render_split_content_line(buf, x, y, width, *ln, content, self.bg_color(), path);
             }
         }
     }

@@ -3,6 +3,109 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+/// RGB color representation for config
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct RgbColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl RgbColor {
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+}
+
+/// Display settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DisplaySettings {
+    /// Show line numbers in diff view
+    pub show_line_numbers: bool,
+
+    /// Default view mode: "unified" or "split"
+    pub default_view_mode: String,
+
+    /// Enable syntax highlighting
+    pub syntax_highlighting: bool,
+
+    /// Minimum brightness for syntax colors (0-255)
+    /// Higher values make colors more visible on dark backgrounds
+    pub min_brightness: u8,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self {
+            show_line_numbers: true,
+            default_view_mode: "unified".to_string(),
+            syntax_highlighting: true,
+            min_brightness: 180,
+        }
+    }
+}
+
+/// Diff color settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiffColors {
+    /// Background color for added lines
+    pub add_bg: RgbColor,
+
+    /// Background color for deleted lines
+    pub del_bg: RgbColor,
+
+    /// Background color for context lines
+    pub context_bg: RgbColor,
+
+    /// Background color for the cursor line
+    pub cursor_bg: RgbColor,
+
+    /// Gutter color for cursor line
+    pub cursor_gutter: RgbColor,
+}
+
+impl Default for DiffColors {
+    fn default() -> Self {
+        Self {
+            add_bg: RgbColor::new(30, 60, 30),
+            del_bg: RgbColor::new(60, 30, 30),
+            context_bg: RgbColor::new(22, 22, 22),
+            cursor_bg: RgbColor::new(45, 45, 65),
+            cursor_gutter: RgbColor::new(100, 100, 180),
+        }
+    }
+}
+
+/// Navigation settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NavigationSettings {
+    /// Number of lines to scroll with Page Up/Down
+    pub scroll_lines: usize,
+
+    /// Number of columns to scroll horizontally
+    pub horizontal_scroll_columns: usize,
+
+    /// Width of the file tree panel
+    pub tree_width: u16,
+
+    /// Collapse folders by default in the file tree
+    pub collapse_folders_by_default: bool,
+}
+
+impl Default for NavigationSettings {
+    fn default() -> Self {
+        Self {
+            scroll_lines: 15,
+            horizontal_scroll_columns: 10,
+            tree_width: 45,
+            collapse_folders_by_default: false,
+        }
+    }
+}
+
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -14,6 +117,18 @@ pub struct Config {
     /// The key is the file extension (without dot), e.g., "rs", "py", "go"
     #[serde(default)]
     pub languages: HashMap<String, LanguageConfig>,
+
+    /// Display settings
+    #[serde(default)]
+    pub display: DisplaySettings,
+
+    /// Diff color settings
+    #[serde(default)]
+    pub colors: DiffColors,
+
+    /// Navigation settings
+    #[serde(default)]
+    pub navigation: NavigationSettings,
 }
 
 /// Language-specific configuration
@@ -29,6 +144,9 @@ impl Default for Config {
         Self {
             default_tab_width: 4,
             languages: HashMap::new(),
+            display: DisplaySettings::default(),
+            colors: DiffColors::default(),
+            navigation: NavigationSettings::default(),
         }
     }
 }
@@ -99,6 +217,11 @@ impl Config {
         }
 
         result
+    }
+
+    /// Check if default view mode is split
+    pub fn is_split_view_default(&self) -> bool {
+        self.display.default_view_mode.to_lowercase() == "split"
     }
 }
 
@@ -241,5 +364,101 @@ tab_width = 8
         let config = Config::default();
         // Files without extension should use default
         assert_eq!(config.tab_width_for_file("Makefile"), 4);
+    }
+
+    #[test]
+    fn test_display_settings_defaults() {
+        let config = Config::default();
+        assert!(config.display.show_line_numbers);
+        assert_eq!(config.display.default_view_mode, "unified");
+        assert!(config.display.syntax_highlighting);
+        assert_eq!(config.display.min_brightness, 180);
+    }
+
+    #[test]
+    fn test_diff_colors_defaults() {
+        let config = Config::default();
+        assert_eq!(config.colors.add_bg.r, 30);
+        assert_eq!(config.colors.add_bg.g, 60);
+        assert_eq!(config.colors.add_bg.b, 30);
+        assert_eq!(config.colors.del_bg.r, 60);
+        assert_eq!(config.colors.del_bg.g, 30);
+        assert_eq!(config.colors.del_bg.b, 30);
+    }
+
+    #[test]
+    fn test_navigation_settings_defaults() {
+        let config = Config::default();
+        assert_eq!(config.navigation.scroll_lines, 15);
+        assert_eq!(config.navigation.horizontal_scroll_columns, 10);
+        assert_eq!(config.navigation.tree_width, 45);
+        assert!(!config.navigation.collapse_folders_by_default);
+    }
+
+    #[test]
+    fn test_parse_toml_with_display_settings() {
+        let toml_str = r#"
+[display]
+show_line_numbers = false
+default_view_mode = "split"
+syntax_highlighting = false
+min_brightness = 200
+"#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.display.show_line_numbers);
+        assert_eq!(config.display.default_view_mode, "split");
+        assert!(!config.display.syntax_highlighting);
+        assert_eq!(config.display.min_brightness, 200);
+    }
+
+    #[test]
+    fn test_parse_toml_with_colors() {
+        let toml_str = r#"
+[colors]
+add_bg = { r = 0, g = 100, b = 0 }
+del_bg = { r = 100, g = 0, b = 0 }
+"#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.colors.add_bg.g, 100);
+        assert_eq!(config.colors.del_bg.r, 100);
+    }
+
+    #[test]
+    fn test_parse_toml_with_navigation() {
+        let toml_str = r#"
+[navigation]
+scroll_lines = 20
+horizontal_scroll_columns = 5
+tree_width = 60
+collapse_folders_by_default = true
+"#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.navigation.scroll_lines, 20);
+        assert_eq!(config.navigation.horizontal_scroll_columns, 5);
+        assert_eq!(config.navigation.tree_width, 60);
+        assert!(config.navigation.collapse_folders_by_default);
+    }
+
+    #[test]
+    fn test_is_split_view_default() {
+        let mut config = Config::default();
+        assert!(!config.is_split_view_default());
+
+        config.display.default_view_mode = "split".to_string();
+        assert!(config.is_split_view_default());
+
+        config.display.default_view_mode = "SPLIT".to_string();
+        assert!(config.is_split_view_default());
+    }
+
+    #[test]
+    fn test_rgb_color_new() {
+        let color = RgbColor::new(255, 128, 64);
+        assert_eq!(color.r, 255);
+        assert_eq!(color.g, 128);
+        assert_eq!(color.b, 64);
     }
 }
