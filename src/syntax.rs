@@ -44,10 +44,6 @@ impl Highlighter {
         Self::with_options(180, DEFAULT_THEME)
     }
 
-    pub fn with_min_brightness(min_brightness: u8) -> Self {
-        Self::with_options(min_brightness, DEFAULT_THEME)
-    }
-
     pub fn with_options(min_brightness: u8, theme: &str) -> Self {
         let theme_set = ThemeSet::load_defaults();
         // Validate theme exists, fall back to default if not
@@ -62,11 +58,6 @@ impl Highlighter {
             theme_name,
             min_brightness,
         }
-    }
-
-    /// Get available theme names
-    pub fn available_themes(&self) -> Vec<&str> {
-        self.theme_set.themes.keys().map(|s| s.as_str()).collect()
     }
 
     /// Get the syntax for a given path (with caching)
@@ -220,11 +211,12 @@ mod tests {
 
     #[test]
     fn test_brightness_clamping() {
-        // Values should be clamped to 255 max
+        // Values should be clamped to 255 max (u8 guarantees this)
+        // This test verifies the function doesn't panic with high values
         let (r, g, b) = ensure_min_brightness(200, 200, 200, 250);
-        assert!(r <= 255);
-        assert!(g <= 255);
-        assert!(b <= 255);
+        // Verify the function produced valid output (boosted but within bounds)
+        let brightness = (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000;
+        assert!(brightness >= 200);
     }
 
     // ========================================================================
@@ -298,8 +290,9 @@ mod tests {
     fn test_highlight_line_empty_content() {
         let highlighter = Highlighter::new();
         let line = highlighter.highlight_line("", "test.rs");
-        // Empty line should still return something
-        assert!(line.spans.is_empty() || line.spans.len() >= 0);
+        // Empty input should not panic - result may be empty or contain empty span
+        let content: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(content.is_empty());
     }
 
     #[test]
