@@ -10,6 +10,7 @@ mod update;
 use anyhow::Result;
 use clap::Parser;
 
+use crate::config::Config;
 use crate::github::{check_gh_cli, fetch_my_prs, fetch_pr_details, fetch_pr_diff, fetch_prs_by_author, fetch_review_prs, parse_pr_url};
 use crate::parser::parse_diff;
 use crate::ui::App;
@@ -30,6 +31,7 @@ EXAMPLES:
     kensa https://github.com/owner/repo/pull/123  Open a specific PR
     kensa --user <username>                       List PRs by a GitHub user
     kensa --upgrade                               Check for updates
+    kensa --init-config                           Generate default config file
 
 KEY BINDINGS:
     PR List:
@@ -76,6 +78,14 @@ struct Args {
     /// Check for updates and exit
     #[arg(long)]
     upgrade: bool,
+
+    /// Generate a default config file at ~/.config/kensa/config.toml
+    #[arg(long)]
+    init_config: bool,
+
+    /// Force overwrite existing config file (use with --init-config)
+    #[arg(long)]
+    force: bool,
 }
 
 #[tokio::main]
@@ -118,6 +128,21 @@ async fn main() -> Result<()> {
             }
         } else {
             eprintln!("Already up to date (v{})", update::VERSION);
+        }
+        return Ok(());
+    }
+
+    // Handle --init-config: create config file and exit
+    if args.init_config {
+        match Config::init(args.force) {
+            Ok(path) => {
+                eprintln!("\x1b[32mConfig file created at:\x1b[0m {}", path.display());
+                eprintln!("\nEdit this file to customize kensa settings.");
+            }
+            Err(e) => {
+                eprintln!("\x1b[31mError:\x1b[0m {}", e);
+                std::process::exit(1);
+            }
         }
         return Ok(());
     }
