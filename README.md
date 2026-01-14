@@ -46,6 +46,10 @@ kensa
 
 # View a specific PR
 kensa https://github.com/owner/repo/pull/123
+
+# List PRs by a specific GitHub user
+kensa --user <username>
+kensa -u <username>
 ```
 
 ## Key Bindings

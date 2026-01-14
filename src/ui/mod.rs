@@ -165,6 +165,7 @@ pub struct App {
     repo_filter: Option<String>, // None = all repos
     available_repos: Vec<String>,
     repo_filter_index: usize, // 0 = all, 1+ = specific repo
+    author_filter: Option<String>, // When viewing PRs by a specific user
 
     // Diff view state
     pub files: Vec<DiffFile>,
@@ -273,6 +274,7 @@ impl App {
             repo_filter: None,
             available_repos: Vec::new(),
             repo_filter_index: 0,
+            author_filter: None,
 
             // Diff view state
             files,
@@ -374,6 +376,7 @@ impl App {
             repo_filter: None,
             available_repos: repos,
             repo_filter_index: 0,
+            author_filter: None,
 
             // Diff view state (empty until a PR is selected)
             files: Vec::new(),
@@ -419,6 +422,14 @@ impl App {
             cached_tree: None,
             cached_flat_items: None,
         }
+    }
+
+    /// Create app in PR list mode showing PRs by a specific author
+    pub fn new_with_author_prs(author: String, prs: Vec<ReviewPr>) -> Self {
+        let mut app = Self::new_with_prs(Vec::new(), prs);
+        app.author_filter = Some(author);
+        app.pr_tab = PrListTab::MyPrs; // Show the author's PRs tab by default
+        app
     }
 
     // ========================================================================
@@ -2754,7 +2765,7 @@ impl App {
         );
         buf.set_string(tabs_start, tab_y, &tab1_text, tab1_style);
 
-        // Tab 2: My PRs
+        // Tab 2: My PRs (or author's PRs if filtering by author)
         let tab2_style = if self.pr_tab == PrListTab::MyPrs {
             Style::default()
                 .fg(Color::Cyan)
@@ -2765,7 +2776,11 @@ impl App {
                 .fg(Color::DarkGray)
                 .bg(Color::Rgb(30, 30, 40))
         };
-        let tab2_text = format!(" [2] My PRs ({}) ", self.filtered_my_pr_indices.len());
+        let tab2_label = match &self.author_filter {
+            Some(author) => format!("@{}'s PRs", author),
+            None => "My PRs".to_string(),
+        };
+        let tab2_text = format!(" [2] {} ({}) ", tab2_label, self.filtered_my_pr_indices.len());
         let tab2_x = tabs_start + tab1_text.len() as u16 + 1;
         buf.set_string(tab2_x, tab_y, &tab2_text, tab2_style);
 

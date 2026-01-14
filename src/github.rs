@@ -378,6 +378,11 @@ pub async fn fetch_my_prs() -> Result<Vec<ReviewPr>> {
     search_prs_with_filter("--author=@me").await
 }
 
+/// Fetch PRs authored by a specific user
+pub async fn fetch_prs_by_author(username: &str) -> Result<Vec<ReviewPr>> {
+    search_prs_with_filter(&format!("--author={}", username)).await
+}
+
 // ============================================================================
 // Comment Thread Functions
 // ============================================================================

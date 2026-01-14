@@ -10,7 +10,7 @@ mod update;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::github::{check_gh_cli, fetch_my_prs, fetch_pr_diff, fetch_review_prs, parse_pr_url};
+use crate::github::{check_gh_cli, fetch_my_prs, fetch_pr_diff, fetch_prs_by_author, fetch_review_prs, parse_pr_url};
 use crate::parser::parse_diff;
 use crate::ui::App;
 use crate::update::check_for_update;
@@ -28,6 +28,7 @@ const LOGO: &str = r#"
 EXAMPLES:
     kensa                                         List PRs awaiting your review
     kensa https://github.com/owner/repo/pull/123  Open a specific PR
+    kensa --user <username>                       List PRs by a GitHub user
     kensa --upgrade                               Check for updates
 
 KEY BINDINGS:
@@ -61,9 +62,12 @@ REQUIREMENTS:
     Install: https://cli.github.com/
 ")]
 struct Args {
-    /// GitHub PR URL (e.g., https://github.com/owner/repo/pull/123).
-    /// If not provided, shows PRs awaiting your review.
+    /// GitHub PR URL (e.g., https://github.com/owner/repo/pull/123)
     pr_url: Option<String>,
+
+    /// Show PRs by a specific GitHub user
+    #[arg(long, short)]
+    user: Option<String>,
 
     /// Disable automatic upgrade check on startup
     #[arg(long)]
@@ -131,53 +135,69 @@ async fn main() -> Result<()> {
     // Check gh CLI is available
     check_gh_cli().await?;
 
-    match args.pr_url {
-        Some(url) => {
-            // Direct PR URL mode
-            let pr = parse_pr_url(&url)?;
-            eprintln!(
-                "Fetching PR #{} from {}/{}...",
-                pr.number, pr.owner, pr.repo
-            );
+    if let Some(username) = args.user {
+        // User mode - show PRs by that user
+        eprintln!("Fetching PRs by @{}...", username);
 
-            let diff_content = fetch_pr_diff(&pr).await?;
-            let files = parse_diff(&diff_content);
+        let prs = fetch_prs_by_author(&username).await?;
 
-            if files.is_empty() {
-                eprintln!("No files found in diff");
-                return Ok(());
-            }
-
-            eprintln!("Found {} files. Starting viewer...", files.len());
-
-            let mut app = App::new(files);
-            app.run()?;
+        if prs.is_empty() {
+            eprintln!("No open PRs found for @{}", username);
+            return Ok(());
         }
-        None => {
-            // PR list mode - show PRs awaiting review and my PRs
-            eprintln!("Fetching PRs...");
 
-            // Fetch both lists concurrently
-            let (review_prs, my_prs) = tokio::join!(fetch_review_prs(), fetch_my_prs());
+        eprintln!(
+            "Found {} PRs by @{}. Starting viewer...",
+            prs.len(),
+            username
+        );
 
-            let review_prs = review_prs?;
-            let my_prs = my_prs?;
+        let mut app = App::new_with_author_prs(username, prs);
+        app.run()?;
+    } else if let Some(url) = args.pr_url {
+        // Direct PR URL mode
+        let pr = parse_pr_url(&url)?;
+        eprintln!(
+            "Fetching PR #{} from {}/{}...",
+            pr.number, pr.owner, pr.repo
+        );
 
-            let total = review_prs.len() + my_prs.len();
-            if total == 0 {
-                eprintln!("No open PRs found.");
-                return Ok(());
-            }
+        let diff_content = fetch_pr_diff(&pr).await?;
+        let files = parse_diff(&diff_content);
 
-            eprintln!(
-                "Found {} PRs for review, {} of your PRs. Starting viewer...",
-                review_prs.len(),
-                my_prs.len()
-            );
-
-            let mut app = App::new_with_prs(review_prs, my_prs);
-            app.run()?;
+        if files.is_empty() {
+            eprintln!("No files found in diff");
+            return Ok(());
         }
+
+        eprintln!("Found {} files. Starting viewer...", files.len());
+
+        let mut app = App::new(files);
+        app.run()?;
+    } else {
+        // PR list mode - show PRs awaiting review and my PRs
+        eprintln!("Fetching PRs...");
+
+        // Fetch both lists concurrently
+        let (review_prs, my_prs) = tokio::join!(fetch_review_prs(), fetch_my_prs());
+
+        let review_prs = review_prs?;
+        let my_prs = my_prs?;
+
+        let total = review_prs.len() + my_prs.len();
+        if total == 0 {
+            eprintln!("No open PRs found.");
+            return Ok(());
+        }
+
+        eprintln!(
+            "Found {} PRs for review, {} of your PRs. Starting viewer...",
+            review_prs.len(),
+            my_prs.len()
+        );
+
+        let mut app = App::new_with_prs(review_prs, my_prs);
+        app.run()?;
     }
 
     Ok(())
