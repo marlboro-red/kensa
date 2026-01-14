@@ -320,6 +320,15 @@ impl App {
         }
     }
 
+    /// Create app in diff view mode with PR context (for direct PR URL with review support)
+    pub fn new_with_pr(files: Vec<DiffFile>, pr: ReviewPr) -> Self {
+        let mut app = Self::new(files);
+        app.current_pr = Some(pr);
+        app.load_current_drafts(); // Load any saved drafts for this PR
+        app.load_comment_threads(); // Load existing comments from GitHub
+        app
+    }
+
     /// Create app in PR list mode
     pub fn new_with_prs(mut review_prs: Vec<ReviewPr>, mut my_prs: Vec<ReviewPr>) -> Self {
         // Sort both lists by repo for proper grouping
