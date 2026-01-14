@@ -103,7 +103,7 @@ kensa -u <username>
 
 kensa can be configured via a TOML file at:
 - **Linux/macOS:** `~/.config/kensa/config.toml`
-- **Windows:** `%APPDATA%\kensa\config.toml`
+- **Windows:** `%APPDATA%\Roaming\kensa\config.toml`
 
 See [`config.toml.example`](config.toml.example) for a complete example with all options.
 
