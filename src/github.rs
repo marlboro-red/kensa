@@ -162,6 +162,7 @@ async fn search_prs_with_filter(filter: &str) -> Result<Vec<ReviewPr>> {
                 author: r.author.login,
                 created_at: r.created_at,
                 head_sha: None,
+                body: None, // Not fetched in search results
             }
         })
         .collect();
@@ -249,7 +250,7 @@ pub async fn fetch_pr_head_sha(pr: &PrInfo) -> Result<String> {
 }
 
 /// Fetch full PR details from a PrInfo (for direct URL mode)
-/// Returns a ReviewPr with all fields populated including head_sha
+/// Returns a ReviewPr with all fields populated including head_sha and body
 pub async fn fetch_pr_details(pr: &PrInfo) -> Result<ReviewPr> {
     let output = Command::new("gh")
         .args([
@@ -258,7 +259,7 @@ pub async fn fetch_pr_details(pr: &PrInfo) -> Result<ReviewPr> {
             &pr.number.to_string(),
             "--repo",
             &format!("{}/{}", pr.owner, pr.repo),
-            "--json=number,title,author,createdAt,headRefOid",
+            "--json=number,title,author,createdAt,headRefOid,body",
         ])
         .output()
         .await
@@ -278,6 +279,8 @@ pub async fn fetch_pr_details(pr: &PrInfo) -> Result<ReviewPr> {
         created_at: String,
         #[serde(rename = "headRefOid")]
         head_ref_oid: String,
+        #[serde(default)]
+        body: Option<String>,
     }
 
     let json_str = String::from_utf8(output.stdout).context("Invalid UTF-8 in response")?;
@@ -291,6 +294,7 @@ pub async fn fetch_pr_details(pr: &PrInfo) -> Result<ReviewPr> {
         author: details.author.login,
         created_at: details.created_at,
         head_sha: Some(details.head_ref_oid),
+        body: details.body,
     })
 }
 

@@ -84,6 +84,7 @@ pub struct ReviewPr {
     pub author: String,
     pub created_at: String,
     pub head_sha: Option<String>,  // For inline comments
+    pub body: Option<String>,      // PR description (fetched on demand)
 }
 
 /// A pending comment to be submitted later
@@ -467,6 +468,7 @@ mod tests {
             author: "testauthor".to_string(),
             created_at: "2024-01-15T10:30:00Z".to_string(),
             head_sha: Some("abc123".to_string()),
+            body: Some("Test PR description".to_string()),
         }
     }
 

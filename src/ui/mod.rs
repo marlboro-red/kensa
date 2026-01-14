@@ -186,7 +186,7 @@ pub struct App {
     selected_tree_item: Option<String>,
 
     // For async diff loading
-    diff_receiver: Option<mpsc::Receiver<Result<(Vec<DiffFile>, Option<String>), String>>>, // (files, head_sha)
+    diff_receiver: Option<mpsc::Receiver<Result<(Vec<DiffFile>, Option<String>, Option<String>), String>>>, // (files, head_sha, body)
     current_pr: Option<ReviewPr>,
 
     // Comment drafting
@@ -204,6 +204,10 @@ pub struct App {
 
     // Help display
     help_mode: HelpMode,
+
+    // PR description display
+    show_pr_description: bool,
+    pr_description_scroll: usize,
 
     // Comment threads (existing comments from GitHub)
     comment_threads: Vec<CommentThread>,
@@ -307,6 +311,9 @@ impl App {
             selection_anchor: 0,
 
             help_mode: HelpMode::None,
+
+            show_pr_description: false,
+            pr_description_scroll: 0,
 
             comment_threads: Vec::new(),
             line_to_threads: HashMap::new(),
@@ -418,6 +425,9 @@ impl App {
             selection_anchor: 0,
 
             help_mode: HelpMode::None,
+
+            show_pr_description: false,
+            pr_description_scroll: 0,
 
             comment_threads: Vec::new(),
             line_to_threads: HashMap::new(),
@@ -824,7 +834,7 @@ impl App {
             if let Some(ref receiver) = self.diff_receiver {
                 if let Ok(result) = receiver.try_recv() {
                     match result {
-                        Ok((files, head_sha)) => {
+                        Ok((files, head_sha, body)) => {
                             let file_count = files.len();
                             self.files = files;
                             self.filtered_indices = (0..file_count).collect();
@@ -836,9 +846,10 @@ impl App {
                             self.invalidate_tree_cache(); // Cache invalidated when files change
                             self.screen = Screen::DiffView;
                             self.loading = LoadingState::Idle;
-                            // Store head SHA for optimized comment submission
+                            // Store head SHA and body for the PR
                             if let Some(ref mut pr) = self.current_pr {
                                 pr.head_sha = head_sha;
+                                pr.body = body;
                             }
                             // Load existing comment threads from GitHub (async)
                             self.load_comment_threads();
@@ -1127,6 +1138,36 @@ impl App {
         // Handle help mode
         if self.help_mode != HelpMode::None {
             self.help_mode = HelpMode::None;
+            return;
+        }
+
+        // Handle PR description view
+        if self.show_pr_description {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') => {
+                    self.show_pr_description = false;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.pr_description_scroll = self.pr_description_scroll.saturating_add(1);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.pr_description_scroll = self.pr_description_scroll.saturating_sub(1);
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.pr_description_scroll = self.pr_description_scroll.saturating_add(10);
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.pr_description_scroll = self.pr_description_scroll.saturating_sub(10);
+                }
+                KeyCode::Char('g') => {
+                    self.pr_description_scroll = 0;
+                }
+                KeyCode::Char('G') => {
+                    // Will be capped in render
+                    self.pr_description_scroll = usize::MAX;
+                }
+                _ => {}
+            }
             return;
         }
 
@@ -1661,6 +1702,11 @@ impl App {
             KeyCode::Char('g') => self.scroll_to_top(),
             KeyCode::Char('G') => self.scroll_to_bottom(),
             KeyCode::Char('o') => self.open_pr_in_browser(),
+            KeyCode::Char('i') => {
+                // Toggle PR description view
+                self.show_pr_description = !self.show_pr_description;
+                self.pr_description_scroll = 0;
+            }
             KeyCode::Char('v') => {
                 // Toggle visual mode
                 if self.focus == Focus::Diff {
@@ -1937,18 +1983,20 @@ impl App {
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let result = rt.block_on(async {
-                // Fetch diff and head SHA in parallel
-                let (diff_result, sha_result) = tokio::join!(
+                // Fetch diff and PR details (including body) in parallel
+                let (diff_result, details_result) = tokio::join!(
                     crate::github::fetch_pr_diff(&pr_info),
-                    crate::github::fetch_pr_head_sha(&pr_info)
+                    crate::github::fetch_pr_details(&pr_info)
                 );
 
-                // Diff is required, head SHA is optional (for comment optimization)
+                // Diff is required, details are optional (for head_sha and body)
                 match diff_result {
                     Ok(diff_content) => {
                         let files = crate::parser::parse_diff(&diff_content);
-                        let head_sha = sha_result.ok();
-                        Ok((files, head_sha))
+                        let (head_sha, body) = details_result
+                            .map(|d| (d.head_sha, d.body))
+                            .unwrap_or((None, None));
+                        Ok((files, head_sha, body))
                     }
                     Err(e) => Err(e.to_string()),
                 }
@@ -2610,6 +2658,11 @@ impl App {
         if self.help_mode != HelpMode::None {
             self.render_help(frame);
         }
+
+        // Render PR description overlay if active
+        if self.show_pr_description {
+            self.render_pr_description(frame);
+        }
     }
 
     fn render_help(&self, frame: &mut ratatui::Frame) {
@@ -2670,6 +2723,7 @@ impl App {
                 ("View", vec![
                     ("Tab", "Toggle tree/diff"),
                     ("d", "Toggle split view"),
+                    ("i", "View PR description"),
                     ("x", "Collapse folder"),
                     ("/", "Search files"),
                 ]),
@@ -2755,6 +2809,114 @@ impl App {
             hint_x,
             popup_area.y + popup_area.height - 1,
             hint,
+            Style::default().fg(Color::Rgb(80, 80, 100)).bg(bg),
+        );
+    }
+
+    fn render_pr_description(&self, frame: &mut ratatui::Frame) {
+        let Some(pr) = &self.current_pr else {
+            return;
+        };
+
+        let area = frame.area();
+        let bg = Color::Rgb(25, 28, 38);
+        let accent = self.accent_color();
+
+        // Use most of the screen for the description
+        let popup_width = (area.width as f32 * 0.8) as u16;
+        let popup_height = (area.height as f32 * 0.8) as u16;
+        let popup_area = Self::centered_popup(area, popup_width, popup_height);
+
+        // Clear popup background
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, bg);
+
+        // Title with PR info
+        let title = format!(" #{} - {} ", pr.number, pr.title);
+        let block = Block::default()
+            .title(title)
+            .title_style(Style::default().fg(accent).add_modifier(Modifier::BOLD))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(accent));
+
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+
+        let buf = frame.buffer_mut();
+
+        // PR metadata header
+        let meta_line = format!("@{} | {} | {}", pr.author, pr.repo_full_name(), pr.age());
+        buf.set_string(
+            inner.x + 1,
+            inner.y,
+            &meta_line,
+            Style::default().fg(Color::Rgb(150, 150, 180)).bg(bg),
+        );
+
+        // Separator line
+        let separator: String = "─".repeat((inner.width.saturating_sub(2)) as usize);
+        buf.set_string(
+            inner.x + 1,
+            inner.y + 1,
+            &separator,
+            Style::default().fg(Color::Rgb(60, 60, 80)).bg(bg),
+        );
+
+        // PR description body with text wrapping
+        let body = pr.body.as_deref().unwrap_or("(No description provided)");
+        let max_width = (inner.width.saturating_sub(2)) as usize;
+        let wrapped_lines = Self::wrap_text_with_code(body, max_width);
+        let content_height = (inner.height.saturating_sub(4)) as usize; // Leave room for header, separator, footer
+        let total_lines = wrapped_lines.len();
+
+        // Cap scroll offset
+        let max_scroll = total_lines.saturating_sub(content_height);
+        let scroll = self.pr_description_scroll.min(max_scroll);
+
+        // Render visible lines
+        let visible_lines = wrapped_lines.iter().skip(scroll).take(content_height);
+        let content_start_y = inner.y + 2;
+        let code_bg = Color::Rgb(35, 38, 48);
+
+        for (i, (line, is_code)) in visible_lines.enumerate() {
+            let y = content_start_y + i as u16;
+            if y >= inner.y + inner.height - 1 {
+                break;
+            }
+
+            let line_bg = if *is_code { code_bg } else { bg };
+            let line_fg = if *is_code {
+                Color::Rgb(180, 220, 180) // Greenish for code
+            } else {
+                Color::Rgb(220, 220, 230)
+            };
+
+            // Clear line background for code blocks
+            if *is_code {
+                for x in inner.x + 1..inner.x + inner.width - 1 {
+                    buf.set_string(x, y, " ", Style::default().bg(line_bg));
+                }
+            }
+
+            buf.set_string(
+                inner.x + 1,
+                y,
+                line,
+                Style::default().fg(line_fg).bg(line_bg),
+            );
+        }
+
+        // Footer with scroll indicator and help
+        let scroll_info = if total_lines > content_height {
+            format!(" {}/{} ", scroll + 1, total_lines.saturating_sub(content_height) + 1)
+        } else {
+            String::new()
+        };
+        let hint = format!("{}j/k scroll | q/Esc close", scroll_info);
+        let hint_x = popup_area.x + (popup_area.width.saturating_sub(hint.len() as u16)) / 2;
+        buf.set_string(
+            hint_x,
+            popup_area.y + popup_area.height - 1,
+            &hint,
             Style::default().fg(Color::Rgb(80, 80, 100)).bg(bg),
         );
     }
