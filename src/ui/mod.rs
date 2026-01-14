@@ -3164,12 +3164,13 @@ impl App {
             }
             x += 2;
 
-            // PR number with better styling
+            // PR number with accent color
             let num_str = format!("#{:<6}", pr.number);
+            let accent = self.accent_color();
             let num_style = if is_selected {
-                Style::default().fg(Color::Rgb(120, 220, 180)).bg(row_bg).add_modifier(Modifier::BOLD)
+                Style::default().fg(accent).bg(row_bg).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Rgb(80, 180, 140)).bg(row_bg)
+                Style::default().fg(accent).bg(row_bg)
             };
             buf.set_string(x, y, &num_str, num_style);
             x += 7;
@@ -3299,7 +3300,7 @@ impl App {
                 buf.set_string(x, area.y, " ", Style::default().bg(header_bg));
             }
 
-            // PR number badge
+            // PR number badge with accent color
             let pr_num = format!(" #{} ", pr.number);
             buf.set_string(
                 area.x + 1,
@@ -3307,7 +3308,7 @@ impl App {
                 &pr_num,
                 Style::default()
                     .fg(Color::Rgb(25, 25, 35))
-                    .bg(Color::Rgb(100, 200, 255))
+                    .bg(self.accent_color())
                     .add_modifier(Modifier::BOLD),
             );
 

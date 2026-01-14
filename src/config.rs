@@ -84,7 +84,7 @@ impl Default for DiffColors {
             context_bg: RgbColor::new(22, 22, 22),
             cursor_bg: RgbColor::new(45, 45, 65),
             cursor_gutter: RgbColor::new(100, 100, 180),
-            accent: RgbColor::new(106, 50, 159),
+            accent: RgbColor::new(0, 200, 200),
         }
     }
 }
@@ -293,8 +293,8 @@ cursor_bg = { r = 45, g = 45, b = 65 }
 # Gutter color for the cursor line (default: light blue)
 cursor_gutter = { r = 100, g = 100, b = 180 }
 
-# Accent color for highlights, PR numbers, focused borders (default: green)
-accent = { r = 0, g = 255, b = 135 }
+# Accent color for highlights, PR numbers, focused borders (default: cyan)
+accent = { r = 0, g = 200, b = 200 }
 
 # =============================================================================
 # NAVIGATION SETTINGS
