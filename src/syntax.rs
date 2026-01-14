@@ -8,6 +8,7 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 pub struct Highlighter {
     syntax_set: SyntaxSet,
     theme_set: ThemeSet,
+    theme_name: String,
     min_brightness: u8,
 }
 
@@ -35,17 +36,37 @@ fn ensure_min_brightness(r: u8, g: u8, b: u8, min_brightness: u8) -> (u8, u8, u8
     }
 }
 
+/// Default theme name
+const DEFAULT_THEME: &str = "base16-eighties.dark";
+
 impl Highlighter {
     pub fn new() -> Self {
-        Self::with_min_brightness(180)
+        Self::with_options(180, DEFAULT_THEME)
     }
 
     pub fn with_min_brightness(min_brightness: u8) -> Self {
+        Self::with_options(min_brightness, DEFAULT_THEME)
+    }
+
+    pub fn with_options(min_brightness: u8, theme: &str) -> Self {
+        let theme_set = ThemeSet::load_defaults();
+        // Validate theme exists, fall back to default if not
+        let theme_name = if theme_set.themes.contains_key(theme) {
+            theme.to_string()
+        } else {
+            DEFAULT_THEME.to_string()
+        };
         Self {
             syntax_set: SyntaxSet::load_defaults_newlines(),
-            theme_set: ThemeSet::load_defaults(),
+            theme_set,
+            theme_name,
             min_brightness,
         }
+    }
+
+    /// Get available theme names
+    pub fn available_themes(&self) -> Vec<&str> {
+        self.theme_set.themes.keys().map(|s| s.as_str()).collect()
     }
 
     /// Get the syntax for a given path (with caching)
@@ -58,7 +79,7 @@ impl Highlighter {
 
     /// Get the theme
     fn get_theme(&self) -> &Theme {
-        &self.theme_set.themes["base16-eighties.dark"]
+        &self.theme_set.themes[&self.theme_name]
     }
 
     /// Convert syntect style to ratatui spans

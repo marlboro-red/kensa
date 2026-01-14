@@ -33,6 +33,11 @@ pub struct DisplaySettings {
     /// Minimum brightness for syntax colors (0-255)
     /// Higher values make colors more visible on dark backgrounds
     pub min_brightness: u8,
+
+    /// Syntax highlighting theme name
+    /// Available themes: base16-ocean.dark, base16-eighties.dark, base16-mocha.dark,
+    /// base16-ocean.light, InspiredGitHub, Solarized (dark), Solarized (light)
+    pub theme: String,
 }
 
 impl Default for DisplaySettings {
@@ -42,6 +47,7 @@ impl Default for DisplaySettings {
             default_view_mode: "unified".to_string(),
             syntax_highlighting: true,
             min_brightness: 180,
+            theme: "base16-eighties.dark".to_string(),
         }
     }
 }
@@ -373,6 +379,7 @@ tab_width = 8
         assert_eq!(config.display.default_view_mode, "unified");
         assert!(config.display.syntax_highlighting);
         assert_eq!(config.display.min_brightness, 180);
+        assert_eq!(config.display.theme, "base16-eighties.dark");
     }
 
     #[test]

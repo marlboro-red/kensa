@@ -56,6 +56,17 @@ syntax_highlighting = true
 # Higher values make colors more visible on dark backgrounds
 min_brightness = 180
 
+# Syntax highlighting theme
+# Available themes:
+#   - base16-ocean.dark
+#   - base16-eighties.dark (default)
+#   - base16-mocha.dark
+#   - base16-ocean.light
+#   - InspiredGitHub
+#   - Solarized (dark)
+#   - Solarized (light)
+theme = "base16-eighties.dark"
+
 # =============================================================================
 # DIFF COLORS (RGB values: 0-255)
 # =============================================================================
