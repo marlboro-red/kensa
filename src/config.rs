@@ -83,7 +83,7 @@ impl Default for DiffColors {
             context_bg: RgbColor::new(22, 22, 22),
             cursor_bg: RgbColor::new(45, 45, 65),
             cursor_gutter: RgbColor::new(100, 100, 180),
-            accent: RgbColor::new(0, 255, 135), // Green (similar to Color::Green)
+            accent: RgbColor::new(106, 50, 159), // Purple
         }
     }
 }
