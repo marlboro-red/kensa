@@ -10,7 +10,7 @@ mod update;
 use anyhow::Result;
 use clap::Parser;
 
-use crate::github::{check_gh_cli, fetch_my_prs, fetch_pr_diff, fetch_prs_by_author, fetch_review_prs, parse_pr_url};
+use crate::github::{check_gh_cli, fetch_my_prs, fetch_pr_details, fetch_pr_diff, fetch_prs_by_author, fetch_review_prs, parse_pr_url};
 use crate::parser::parse_diff;
 use crate::ui::App;
 use crate::update::check_for_update;
@@ -156,13 +156,20 @@ async fn main() -> Result<()> {
         app.run()?;
     } else if let Some(url) = args.pr_url {
         // Direct PR URL mode
-        let pr = parse_pr_url(&url)?;
+        let pr_info = parse_pr_url(&url)?;
         eprintln!(
             "Fetching PR #{} from {}/{}...",
-            pr.number, pr.owner, pr.repo
+            pr_info.number, pr_info.owner, pr_info.repo
         );
 
-        let diff_content = fetch_pr_diff(&pr).await?;
+        // Fetch diff and PR details concurrently
+        let (diff_result, details_result) = tokio::join!(
+            fetch_pr_diff(&pr_info),
+            fetch_pr_details(&pr_info)
+        );
+
+        let diff_content = diff_result?;
+        let pr = details_result?;
         let files = parse_diff(&diff_content);
 
         if files.is_empty() {
@@ -172,7 +179,7 @@ async fn main() -> Result<()> {
 
         eprintln!("Found {} files. Starting viewer...", files.len());
 
-        let mut app = App::new(files);
+        let mut app = App::new_with_pr(files, pr);
         app.run()?;
     } else {
         // PR list mode - show PRs awaiting review and my PRs

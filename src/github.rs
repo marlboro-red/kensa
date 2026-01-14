@@ -206,6 +206,52 @@ pub async fn fetch_pr_head_sha(pr: &PrInfo) -> Result<String> {
     Ok(result.head_ref_oid)
 }
 
+/// Fetch full PR details from a PrInfo (for direct URL mode)
+/// Returns a ReviewPr with all fields populated including head_sha
+pub async fn fetch_pr_details(pr: &PrInfo) -> Result<ReviewPr> {
+    let output = Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            &pr.number.to_string(),
+            "--repo",
+            &format!("{}/{}", pr.owner, pr.repo),
+            "--json=number,title,author,createdAt,headRefOid",
+        ])
+        .output()
+        .await
+        .context("Failed to fetch PR details")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("Failed to fetch PR details: {}", stderr));
+    }
+
+    #[derive(Deserialize)]
+    struct PrDetails {
+        number: u32,
+        title: String,
+        author: GhAuthor,
+        #[serde(rename = "createdAt")]
+        created_at: String,
+        #[serde(rename = "headRefOid")]
+        head_ref_oid: String,
+    }
+
+    let json_str = String::from_utf8(output.stdout).context("Invalid UTF-8 in response")?;
+    let details: PrDetails = serde_json::from_str(&json_str).context("Failed to parse PR details")?;
+
+    Ok(ReviewPr {
+        number: details.number,
+        title: details.title,
+        repo_owner: pr.owner.clone(),
+        repo_name: pr.repo.clone(),
+        author: details.author.login,
+        created_at: details.created_at,
+        head_sha: Some(details.head_ref_oid),
+    })
+}
+
 /// Submit a comment to a PR (general or inline)
 pub async fn submit_pr_comment(pr: &PrInfo, comment: &PendingComment, head_sha: Option<&str>) -> Result<()> {
     let repo = format!("{}/{}", pr.owner, pr.repo);
