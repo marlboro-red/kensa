@@ -83,7 +83,7 @@ impl Default for DiffColors {
             context_bg: RgbColor::new(22, 22, 22),
             cursor_bg: RgbColor::new(45, 45, 65),
             cursor_gutter: RgbColor::new(100, 100, 180),
-            accent: RgbColor::new(0, 255, 135), // Green (similar to Color::Green)
+            accent: RgbColor::new(106, 50, 159),
         }
     }
 }
@@ -256,14 +256,12 @@ mod tests {
     #[test]
     fn test_tab_width_for_file_custom() {
         let mut config = Config::default();
-        config.languages.insert(
-            "go".to_string(),
-            LanguageConfig { tab_width: 8 },
-        );
-        config.languages.insert(
-            "py".to_string(),
-            LanguageConfig { tab_width: 2 },
-        );
+        config
+            .languages
+            .insert("go".to_string(), LanguageConfig { tab_width: 8 });
+        config
+            .languages
+            .insert("py".to_string(), LanguageConfig { tab_width: 2 });
 
         assert_eq!(config.tab_width_for_file("test.go"), 8);
         assert_eq!(config.tab_width_for_file("test.py"), 2);
@@ -295,10 +293,9 @@ mod tests {
     #[test]
     fn test_expand_tabs_custom_width() {
         let mut config = Config::default();
-        config.languages.insert(
-            "go".to_string(),
-            LanguageConfig { tab_width: 8 },
-        );
+        config
+            .languages
+            .insert("go".to_string(), LanguageConfig { tab_width: 8 });
 
         let result = config.expand_tabs("\thello", "test.go");
         assert_eq!(result, "        hello");
@@ -321,10 +318,9 @@ mod tests {
     #[test]
     fn test_expand_tabs_zero_width() {
         let mut config = Config::default();
-        config.languages.insert(
-            "mk".to_string(),
-            LanguageConfig { tab_width: 0 },
-        );
+        config
+            .languages
+            .insert("mk".to_string(), LanguageConfig { tab_width: 0 });
 
         // Tab width of 0 should preserve tabs
         let result = config.expand_tabs("\thello", "Makefile.mk");
