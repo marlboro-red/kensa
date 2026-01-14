@@ -169,9 +169,51 @@ async fn search_prs_with_filter(filter: &str) -> Result<Vec<ReviewPr>> {
     Ok(prs)
 }
 
-/// Fetch all PRs where review is requested from the current user
+/// Get the current authenticated GitHub username
+async fn get_current_user() -> Result<String> {
+    let output = Command::new("gh")
+        .args(["api", "user", "--jq", ".login"])
+        .output()
+        .await
+        .context("Failed to get current user")?;
+
+    if !output.status.success() {
+        return Err(anyhow!("Failed to get current user"));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Fetch all PRs where review is requested or already reviewed by the current user
 pub async fn fetch_review_prs() -> Result<Vec<ReviewPr>> {
-    search_prs_with_filter("--review-requested=@me").await
+    // Fetch current user, requested PRs, and reviewed PRs in parallel
+    let (current_user, requested, reviewed) = tokio::join!(
+        get_current_user(),
+        search_prs_with_filter("--review-requested=@me"),
+        search_prs_with_filter("--reviewed-by=@me")
+    );
+
+    let current_user = current_user?;
+    let mut prs = requested?;
+    let reviewed_prs = reviewed?;
+
+    // Add reviewed PRs that aren't already in the list (dedupe by repo+number)
+    // Also filter out PRs where the current user is the author
+    for pr in reviewed_prs {
+        // Skip PRs authored by the current user
+        if pr.author.eq_ignore_ascii_case(&current_user) {
+            continue;
+        }
+
+        let exists = prs.iter().any(|p| {
+            p.number == pr.number && p.repo_owner == pr.repo_owner && p.repo_name == pr.repo_name
+        });
+        if !exists {
+            prs.push(pr);
+        }
+    }
+
+    Ok(prs)
 }
 
 /// Fetch the head SHA for a PR (needed for inline comments)
