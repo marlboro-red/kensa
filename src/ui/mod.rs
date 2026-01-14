@@ -1075,14 +1075,25 @@ impl App {
                 self.pr_search_query.clear();
             }
             KeyCode::Char('1') => {
-                self.pr_tab = PrListTab::ForReview;
-                self.update_filtered_pr_indices();
+                // Ignore in author mode (no tabs)
+                if self.author_filter.is_none() {
+                    self.pr_tab = PrListTab::ForReview;
+                    self.update_filtered_pr_indices();
+                }
             }
             KeyCode::Char('2') => {
-                self.pr_tab = PrListTab::MyPrs;
-                self.update_filtered_pr_indices();
+                // Ignore in author mode (no tabs)
+                if self.author_filter.is_none() {
+                    self.pr_tab = PrListTab::MyPrs;
+                    self.update_filtered_pr_indices();
+                }
             }
-            KeyCode::Tab => self.toggle_pr_tab(),
+            KeyCode::Tab => {
+                // Ignore in author mode (no tabs)
+                if self.author_filter.is_none() {
+                    self.toggle_pr_tab();
+                }
+            }
             KeyCode::Char('j') | KeyCode::Down => self.move_pr_down(),
             KeyCode::Char('k') | KeyCode::Up => self.move_pr_up(),
             KeyCode::Char('f') => self.cycle_repo_filter(),
@@ -1601,8 +1612,8 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => {
-                // If we came from PR list, go back; otherwise quit
-                if !self.review_prs.is_empty() {
+                // If we came from PR list (normal or author mode), go back; otherwise quit
+                if !self.review_prs.is_empty() || !self.my_prs.is_empty() || self.author_filter.is_some() {
                     self.screen = Screen::PrList;
                     self.current_pr = None;
                 } else {
@@ -1618,7 +1629,7 @@ impl App {
                 {
                     self.search_query.clear();
                     self.update_filtered_indices();
-                } else if !self.review_prs.is_empty() {
+                } else if !self.review_prs.is_empty() || !self.my_prs.is_empty() || self.author_filter.is_some() {
                     self.screen = Screen::PrList;
                     self.current_pr = None;
                 } else {
@@ -2729,11 +2740,11 @@ impl App {
         let area = frame.area();
         let buf = frame.buffer_mut();
 
-        // Render tab bar at top
+        // Render header bar at top
         let tab_height = 2;
         let tab_y = area.y;
 
-        // Tab bar background
+        // Header bar background
         let tab_bg = Style::default().bg(Color::Rgb(30, 30, 40));
         for x in area.x..area.x + area.width {
             buf.set_string(x, tab_y, " ", tab_bg);
@@ -2757,53 +2768,60 @@ impl App {
 
         let tabs_start = area.x + 1 + name_width + sep.len() as u16;
 
-        // Tab 1: For Review
-        let tab1_style = if self.pr_tab == PrListTab::ForReview {
-            Style::default()
+        // Author mode: simple header without tabs
+        if let Some(ref author) = self.author_filter {
+            let header_style = Style::default()
                 .fg(Color::Cyan)
                 .bg(Color::Rgb(30, 30, 40))
-                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::BOLD);
+            let header_text = format!(" @{}'s PRs ({}) ", author, self.filtered_my_pr_indices.len());
+            buf.set_string(tabs_start, tab_y, &header_text, header_style);
         } else {
-            Style::default()
-                .fg(Color::DarkGray)
-                .bg(Color::Rgb(30, 30, 40))
-        };
-        let tab1_text = format!(
-            " [1] For Review ({}) ",
-            self.filtered_review_pr_indices.len()
-        );
-        buf.set_string(tabs_start, tab_y, &tab1_text, tab1_style);
+            // Normal mode: show tabs
+            // Tab 1: For Review
+            let tab1_style = if self.pr_tab == PrListTab::ForReview {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Rgb(30, 30, 40))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .bg(Color::Rgb(30, 30, 40))
+            };
+            let tab1_text = format!(
+                " [1] For Review ({}) ",
+                self.filtered_review_pr_indices.len()
+            );
+            buf.set_string(tabs_start, tab_y, &tab1_text, tab1_style);
 
-        // Tab 2: My PRs (or author's PRs if filtering by author)
-        let tab2_style = if self.pr_tab == PrListTab::MyPrs {
-            Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Rgb(30, 30, 40))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(Color::DarkGray)
-                .bg(Color::Rgb(30, 30, 40))
-        };
-        let tab2_label = match &self.author_filter {
-            Some(author) => format!("@{}'s PRs", author),
-            None => "My PRs".to_string(),
-        };
-        let tab2_text = format!(" [2] {} ({}) ", tab2_label, self.filtered_my_pr_indices.len());
-        let tab2_x = tabs_start + tab1_text.len() as u16 + 1;
-        buf.set_string(tab2_x, tab_y, &tab2_text, tab2_style);
+            // Tab 2: My PRs
+            let tab2_style = if self.pr_tab == PrListTab::MyPrs {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Rgb(30, 30, 40))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .bg(Color::Rgb(30, 30, 40))
+            };
+            let tab2_text = format!(" [2] My PRs ({}) ", self.filtered_my_pr_indices.len());
+            let tab2_x = tabs_start + tab1_text.len() as u16 + 1;
+            buf.set_string(tab2_x, tab_y, &tab2_text, tab2_style);
 
-        // Tab hint
-        let hint = "Tab: switch";
-        let hint_x = area.x + area.width - hint.len() as u16 - 2;
-        buf.set_string(
-            hint_x,
-            tab_y,
-            hint,
-            Style::default()
-                .fg(Color::DarkGray)
-                .bg(Color::Rgb(30, 30, 40)),
-        );
+            // Tab hint
+            let hint = "Tab: switch";
+            let hint_x = area.x + area.width - hint.len() as u16 - 2;
+            buf.set_string(
+                hint_x,
+                tab_y,
+                hint,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .bg(Color::Rgb(30, 30, 40)),
+            );
+        }
 
         // Filter/search info on second line
         let filter_info = if self.pr_search_mode {
