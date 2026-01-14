@@ -70,6 +70,9 @@ pub struct DiffColors {
 
     /// Gutter color for cursor line
     pub cursor_gutter: RgbColor,
+
+    /// Accent color used for highlights, PR numbers, active elements
+    pub accent: RgbColor,
 }
 
 impl Default for DiffColors {
@@ -80,6 +83,7 @@ impl Default for DiffColors {
             context_bg: RgbColor::new(22, 22, 22),
             cursor_bg: RgbColor::new(45, 45, 65),
             cursor_gutter: RgbColor::new(100, 100, 180),
+            accent: RgbColor::new(0, 255, 135), // Green (similar to Color::Green)
         }
     }
 }

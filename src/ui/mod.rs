@@ -475,6 +475,12 @@ impl App {
         Color::Rgb(c.r, c.g, c.b)
     }
 
+    /// Get the accent color for highlights, active elements
+    fn accent_color(&self) -> Color {
+        let c = &self.config.colors.accent;
+        Color::Rgb(c.r, c.g, c.b)
+    }
+
     // ========================================================================
     // UI Helper Functions
     // ========================================================================
@@ -2960,7 +2966,7 @@ impl App {
 
             // PR number
             let num_str = format!("#{:<5}", pr.number);
-            buf.set_string(x, y, &num_str, style.fg(Color::Green));
+            buf.set_string(x, y, &num_str, style.fg(self.accent_color()));
             x += 6;
 
             // Calculate space for title
@@ -4230,7 +4236,7 @@ impl App {
     fn render_tree(&self, frame: &mut ratatui::Frame, area: Rect) {
         let is_focused = self.focus == Focus::Tree || self.search_mode;
         let border_style = if is_focused {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(self.accent_color()).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
@@ -4427,7 +4433,7 @@ impl App {
 
         let is_focused = self.focus == Focus::Diff;
         let border_style = if is_focused {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(self.accent_color()).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };

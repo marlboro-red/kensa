@@ -131,6 +131,7 @@ del_bg = { r = 60, g = 30, b = 30 }       # Deleted lines background
 context_bg = { r = 22, g = 22, b = 22 }   # Context lines background
 cursor_bg = { r = 45, g = 45, b = 65 }    # Cursor line background
 cursor_gutter = { r = 100, g = 100, b = 180 } # Cursor gutter color
+accent = { r = 0, g = 255, b = 135 }      # Accent color (PR numbers, focused borders)
 ```
 
 ### Navigation Settings
