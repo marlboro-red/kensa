@@ -4199,24 +4199,27 @@ impl App {
     }
 
     fn render_tree(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let border_style = if self.focus == Focus::Tree || self.search_mode {
-            Style::default().fg(Color::Cyan)
+        let is_focused = self.focus == Focus::Tree || self.search_mode;
+        let border_style = if is_focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
 
         // Calculate inner area for content
+        let focus_indicator = if is_focused && !self.search_mode { "▶ " } else { "" };
         let title = if self.search_mode {
             format!(" /{}_ ", self.search_query)
         } else if !self.search_query.is_empty() {
             format!(
-                " Files ({}/{}) [{}] ",
+                " {}Files ({}/{}) [{}] ",
+                focus_indicator,
                 self.filtered_indices.len(),
                 self.files.len(),
                 self.search_query
             )
         } else {
-            format!(" Files ({}) ", self.files.len())
+            format!(" {}Files ({}) ", focus_indicator, self.files.len())
         };
 
         let block = Block::default()
@@ -4393,18 +4396,20 @@ impl App {
             return;
         };
 
-        let border_style = if self.focus == Focus::Diff {
-            Style::default().fg(Color::Cyan)
+        let is_focused = self.focus == Focus::Diff;
+        let border_style = if is_focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
 
+        let focus_indicator = if is_focused { "▶ " } else { "" };
         let title = if self.collapsed.contains(&self.selected_file) {
-            format!(" {} [collapsed] ", file.path)
+            format!(" {}{} [collapsed] ", focus_indicator, file.path)
         } else if self.view_mode == ViewMode::Split {
-            format!(" {} [split] ", file.path)
+            format!(" {}{} [split] ", focus_indicator, file.path)
         } else {
-            format!(" {} ", file.path)
+            format!(" {}{} ", focus_indicator, file.path)
         };
 
         let block = Block::default()
