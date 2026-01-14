@@ -72,10 +72,6 @@ struct Args {
     #[arg(long, short)]
     user: Option<String>,
 
-    /// Disable automatic upgrade check on startup
-    #[arg(long)]
-    no_upgrade_check: bool,
-
     /// Check for updates and exit
     #[arg(long)]
     upgrade: bool,
@@ -100,7 +96,7 @@ async fn main() -> Result<()> {
     // Handle --upgrade: check for updates and exit
     if args.upgrade {
         eprintln!("Checking for updates...");
-        if let Some(update_msg) = check_for_update(true).await {
+        if let Some(update_msg) = check_for_update().await {
             eprintln!("\x1b[33m{}\x1b[0m", update_msg);
             eprint!("\nUpgrade now? [Y/n] ");
             use std::io::Write;
@@ -208,13 +204,6 @@ async fn main() -> Result<()> {
 
     // Show logo
     eprintln!("{}", LOGO);
-
-    // Check for updates (unless disabled)
-    if !args.no_upgrade_check {
-        if let Some(update_msg) = check_for_update(false).await {
-            eprintln!("\x1b[33m{}\x1b[0m\n", update_msg); // Yellow color
-        }
-    }
 
     // Check gh CLI is available
     check_gh_cli().await?;
