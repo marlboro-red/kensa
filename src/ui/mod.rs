@@ -2626,8 +2626,8 @@ impl App {
         Self::clear_popup_background(frame.buffer_mut(), popup_area, bg);
 
         let title = match self.help_mode {
-            HelpMode::PrList => " ⌨ PR List Shortcuts ",
-            HelpMode::DiffView => " ⌨ Diff View Shortcuts ",
+            HelpMode::PrList => " PR List Shortcuts ",
+            HelpMode::DiffView => " Diff View Shortcuts ",
             HelpMode::None => return,
         };
 
@@ -2777,8 +2777,8 @@ impl App {
         let buf = frame.buffer_mut();
         let bg = Color::Rgb(30, 35, 50);
 
-        // Spinner animation (using unicode braille pattern)
-        let spinner = "◐"; // Could rotate through ◐ ◓ ◑ ◒
+        // Loading indicator
+        let spinner = "*";
         buf.set_string(
             inner.x + (inner.width / 2).saturating_sub(1),
             inner.y,
@@ -2806,7 +2806,7 @@ impl App {
         Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(50, 30, 35));
 
         let block = Block::default()
-            .title(" ✗ Error ")
+            .title(" Error ")
             .title_style(Style::default().fg(Color::Rgb(255, 100, 100)).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Rgb(200, 80, 80)));
@@ -2853,7 +2853,7 @@ impl App {
         Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(30, 50, 40));
 
         let block = Block::default()
-            .title(" ✓ Success ")
+            .title(" Success ")
             .title_style(Style::default().fg(Color::Rgb(100, 220, 140)).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Rgb(80, 180, 120)));
@@ -2902,8 +2902,8 @@ impl App {
             buf.set_string(x, tab_y + 2, " ", Style::default().bg(Color::Rgb(35, 35, 45)));
         }
 
-        // App name with icon
-        let name = "◆ kensa";
+        // App name
+        let name = "kensa";
         let name_style = Style::default()
             .fg(Color::Rgb(180, 140, 255)) // Softer purple
             .bg(header_bg)
@@ -2911,11 +2911,11 @@ impl App {
         buf.set_string(area.x + 1, tab_y, name, name_style);
 
         // Separator
-        let sep = " │ ";
+        let sep = " | ";
         let sep_style = Style::default()
             .fg(Color::Rgb(60, 60, 70))
             .bg(header_bg);
-        let name_width: u16 = 8; // "◆ kensa"
+        let name_width: u16 = 5; // "kensa"
         buf.set_string(area.x + 1 + name_width, tab_y, sep, sep_style);
 
         let tabs_start = area.x + 1 + name_width + sep.len() as u16;
@@ -2947,7 +2947,7 @@ impl App {
                     .bg(header_bg)
             };
             let tab1_text = format!(
-                " ● For Review ({}) ",
+                " For Review ({}) ",
                 self.filtered_review_pr_indices.len()
             );
             buf.set_string(tabs_start, tab_y, &tab1_text, tab1_style);
@@ -2970,7 +2970,7 @@ impl App {
                     .fg(Color::Rgb(100, 100, 110))
                     .bg(header_bg)
             };
-            let tab2_text = format!(" ○ My PRs ({}) ", self.filtered_my_pr_indices.len());
+            let tab2_text = format!(" My PRs ({}) ", self.filtered_my_pr_indices.len());
             let tab2_x = tabs_start + tab1_text.len() as u16;
             buf.set_string(tab2_x, tab_y, &tab2_text, tab2_style);
             // Underline for active tab
@@ -2995,14 +2995,14 @@ impl App {
 
         // Filter/search info on third line (separator line)
         let filter_info = if self.pr_search_mode {
-            format!("  🔍 {}_ ", self.pr_search_query)
+            format!("  /{}_ ", self.pr_search_query)
         } else {
             let mut info = String::new();
             if let Some(ref repo) = self.repo_filter {
-                info.push_str(&format!(" 📁 {} ", repo));
+                info.push_str(&format!(" repo:{} ", repo));
             }
             if !self.pr_search_query.is_empty() {
-                info.push_str(&format!(" 🔍 {} ", self.pr_search_query));
+                info.push_str(&format!(" filter:{} ", self.pr_search_query));
             }
             info
         };
@@ -3115,8 +3115,8 @@ impl App {
                     buf.set_string(x, y, " ", Style::default().bg(header_bg));
                 }
 
-                // Repo icon and name
-                let repo_display = format!("  📂 {}", repo);
+                // Repo name
+                let repo_display = format!("  {}", repo);
                 let truncated_repo: String =
                     repo_display.chars().take(inner_area.width as usize - 1).collect();
                 buf.set_string(inner_area.x, y, &truncated_repo, header_style);
@@ -3407,7 +3407,7 @@ impl App {
 
             // Pending comments badge (right side)
             if !self.pending_comments.is_empty() {
-                let comment_badge = format!(" ✎ {} drafts ", self.pending_comments.len());
+                let comment_badge = format!(" {} drafts ", self.pending_comments.len());
                 let badge_x = area.x + area.width - comment_badge.len() as u16 - 1;
                 buf.set_string(
                     badge_x,
@@ -4819,10 +4819,10 @@ impl App {
                     // Calculate space for badges at end
                     let mut end_badges = String::new();
                     if pending_count > 0 {
-                        end_badges.push_str(&format!(" ✎{}", pending_count));
+                        end_badges.push_str(&format!(" +{}", pending_count));
                     }
                     if thread_count > 0 {
-                        end_badges.push_str(&format!(" 💬{}", thread_count));
+                        end_badges.push_str(&format!(" c{}", thread_count));
                     }
                     let badges_width = end_badges.chars().count();
 
@@ -4838,7 +4838,7 @@ impl App {
                         let badge_x = inner_area.x + inner_area.width - badges_width as u16 - 1;
                         let mut bx = badge_x;
                         if pending_count > 0 {
-                            let draft_badge = format!("✎{}", pending_count);
+                            let draft_badge = format!("+{}", pending_count);
                             buf.set_string(
                                 bx,
                                 y,
@@ -4851,7 +4851,7 @@ impl App {
                             bx += draft_badge.len() as u16 + 1;
                         }
                         if thread_count > 0 {
-                            let thread_badge = format!("💬{}", thread_count);
+                            let thread_badge = format!("c{}", thread_count);
                             buf.set_string(
                                 bx,
                                 y,
