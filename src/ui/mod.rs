@@ -519,15 +519,19 @@ impl App {
         self.cached_flat_items = None;
     }
 
-    /// Get cached flat items for navigation (builds and caches if needed)
-    fn get_cached_flat_items(&mut self) -> Vec<TreeItem> {
+    /// Ensure flat items cache is populated (builds if needed)
+    fn ensure_flat_items_cached(&mut self) {
         if self.cached_flat_items.is_none() {
             let tree = self.build_tree_internal();
             let flat_items = self.flatten_tree(&tree);
             self.cached_tree = Some(tree);
             self.cached_flat_items = Some(flat_items);
         }
-        self.cached_flat_items.clone().unwrap_or_default()
+    }
+
+    /// Get cached flat items for navigation (call ensure_flat_items_cached first)
+    fn get_flat_items(&self) -> &[TreeItem] {
+        self.cached_flat_items.as_deref().unwrap_or(&[])
     }
 
     /// Collect all folder paths from the current files
@@ -786,7 +790,7 @@ impl App {
     }
 
     /// Get the tree prefix characters for a given depth and position
-    fn get_tree_prefix(&self, depth: usize, is_last: bool, ancestors_last: &[bool]) -> String {
+    fn get_tree_prefix(&self, _depth: usize, is_last: bool, ancestors_last: &[bool]) -> String {
         let mut prefix = String::new();
 
         for &ancestor_is_last in ancestors_last {
@@ -797,12 +801,11 @@ impl App {
             }
         }
 
-        if depth > 0 || !ancestors_last.is_empty() || depth == 0 {
-            if is_last {
-                prefix.push_str("└─");
-            } else {
-                prefix.push_str("├─");
-            }
+        // Add tree branch characters for all items
+        if is_last {
+            prefix.push_str("└─");
+        } else {
+            prefix.push_str("├─");
         }
 
         prefix
@@ -2371,8 +2374,9 @@ impl App {
     }
 
     fn move_to_next_tree_item(&mut self) {
-        // Use cached flat items to avoid rebuilding tree on every navigation
-        let flat_items = self.get_cached_flat_items();
+        // Ensure cache is populated, then work with the cached data
+        self.ensure_flat_items_cached();
+        let flat_items = self.get_flat_items();
 
         if flat_items.is_empty() {
             return;
@@ -2390,20 +2394,26 @@ impl App {
             .unwrap_or(0);
 
         if current_pos < flat_items.len() - 1 {
-            match &flat_items[current_pos + 1] {
-                TreeItem::File { index, .. } => {
-                    self.select_file(*index);
-                }
-                TreeItem::Folder { path, .. } => {
-                    self.selected_tree_item = Some(path.clone());
+            // Extract the values we need before modifying self
+            let next_item_info = match &flat_items[current_pos + 1] {
+                TreeItem::File { index, .. } => Some((true, *index, String::new())),
+                TreeItem::Folder { path, .. } => Some((false, 0, path.clone())),
+            };
+
+            if let Some((is_file, index, path)) = next_item_info {
+                if is_file {
+                    self.select_file(index);
+                } else {
+                    self.selected_tree_item = Some(path);
                 }
             }
         }
     }
 
     fn move_to_prev_tree_item(&mut self) {
-        // Use cached flat items to avoid rebuilding tree on every navigation
-        let flat_items = self.get_cached_flat_items();
+        // Ensure cache is populated, then work with the cached data
+        self.ensure_flat_items_cached();
+        let flat_items = self.get_flat_items();
 
         if flat_items.is_empty() {
             return;
@@ -2421,20 +2431,26 @@ impl App {
             .unwrap_or(0);
 
         if current_pos > 0 {
-            match &flat_items[current_pos - 1] {
-                TreeItem::File { index, .. } => {
-                    self.select_file(*index);
-                }
-                TreeItem::Folder { path, .. } => {
-                    self.selected_tree_item = Some(path.clone());
+            // Extract the values we need before modifying self
+            let prev_item_info = match &flat_items[current_pos - 1] {
+                TreeItem::File { index, .. } => Some((true, *index, String::new())),
+                TreeItem::Folder { path, .. } => Some((false, 0, path.clone())),
+            };
+
+            if let Some((is_file, index, path)) = prev_item_info {
+                if is_file {
+                    self.select_file(index);
+                } else {
+                    self.selected_tree_item = Some(path);
                 }
             }
         }
     }
 
     fn move_to_next_file_only(&mut self) {
-        // Use cached flat items to avoid rebuilding tree on every navigation
-        let flat_items = self.get_cached_flat_items();
+        // Ensure cache is populated, then work with the cached data
+        self.ensure_flat_items_cached();
+        let flat_items = self.get_flat_items();
 
         // Find current position
         let current_pos = flat_items
@@ -2448,17 +2464,23 @@ impl App {
             .unwrap_or(0);
 
         // Find next file after current position
-        for item in flat_items.iter().skip(current_pos + 1) {
+        let next_file_idx = flat_items.iter().skip(current_pos + 1).find_map(|item| {
             if let TreeItem::File { index, .. } = item {
-                self.select_file(*index);
-                return;
+                Some(*index)
+            } else {
+                None
             }
+        });
+
+        if let Some(idx) = next_file_idx {
+            self.select_file(idx);
         }
     }
 
     fn move_to_prev_file_only(&mut self) {
-        // Use cached flat items to avoid rebuilding tree on every navigation
-        let flat_items = self.get_cached_flat_items();
+        // Ensure cache is populated, then work with the cached data
+        self.ensure_flat_items_cached();
+        let flat_items = self.get_flat_items();
 
         // Find current position
         let current_pos = flat_items
@@ -2472,11 +2494,16 @@ impl App {
             .unwrap_or(0);
 
         // Find previous file before current position
-        for item in flat_items.iter().take(current_pos).rev() {
+        let prev_file_idx = flat_items.iter().take(current_pos).rev().find_map(|item| {
             if let TreeItem::File { index, .. } = item {
-                self.select_file(*index);
-                return;
+                Some(*index)
+            } else {
+                None
             }
+        });
+
+        if let Some(idx) = prev_file_idx {
+            self.select_file(idx);
         }
     }
 

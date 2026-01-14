@@ -62,10 +62,12 @@ fn is_newer_version(current: &str, latest: &str) -> bool {
         let v = parse_version(v);
         let parts: Vec<&str> = v.split('.').collect();
         if parts.len() >= 3 {
+            // Handle pre-release versions like "1.0.0-beta" by taking only the numeric part
+            let patch_str = parts[2].split('-').next().unwrap_or(parts[2]);
             Some((
                 parts[0].parse().ok()?,
                 parts[1].parse().ok()?,
-                parts[2].parse().ok()?,
+                patch_str.parse().ok()?,
             ))
         } else {
             None
@@ -188,5 +190,13 @@ mod tests {
     fn test_parse_version_strips_v() {
         assert_eq!(parse_version("v1.2.3"), "1.2.3");
         assert_eq!(parse_version("1.2.3"), "1.2.3");
+    }
+
+    #[test]
+    fn test_is_newer_version_prerelease() {
+        // Pre-release versions should parse correctly (ignoring pre-release suffix)
+        assert!(is_newer_version("1.0.0", "1.0.1-beta"));
+        assert!(is_newer_version("1.0.0-alpha", "1.0.1"));
+        assert!(!is_newer_version("1.0.1", "1.0.0-beta"));
     }
 }
