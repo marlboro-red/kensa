@@ -2982,7 +2982,12 @@ impl App {
 
             // Author and age (right-aligned)
             let right_x = inner_area.x + inner_area.width - author_age_len as u16 - 1;
-            buf.set_string(right_x, y, &author_age, style.fg(Color::DarkGray));
+            let author_style = if is_selected {
+                style.fg(Color::Gray) // Lighter color when selected (DarkGray background)
+            } else {
+                style.fg(Color::DarkGray)
+            };
+            buf.set_string(right_x, y, &author_age, author_style);
 
             row += 1;
         }
