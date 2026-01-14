@@ -32,6 +32,7 @@ EXAMPLES:
     kensa --user <username>                       List PRs by a GitHub user
     kensa --upgrade                               Check for updates
     kensa --init-config                           Generate default config file
+    kensa --edit-config                           Open config in editor
 
 KEY BINDINGS:
     PR List:
@@ -86,6 +87,10 @@ struct Args {
     /// Force overwrite existing config file (use with --init-config)
     #[arg(long)]
     force: bool,
+
+    /// Open config file in your default editor ($EDITOR)
+    #[arg(long, short = 'e')]
+    edit_config: bool,
 }
 
 #[tokio::main]
@@ -139,6 +144,18 @@ async fn main() -> Result<()> {
                 eprintln!("\x1b[32mConfig file created at:\x1b[0m {}", path.display());
                 eprintln!("\nEdit this file to customize kensa settings.");
             }
+            Err(e) => {
+                eprintln!("\x1b[31mError:\x1b[0m {}", e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    // Handle --edit-config: open config in editor and exit
+    if args.edit_config {
+        match Config::edit() {
+            Ok(()) => {}
             Err(e) => {
                 eprintln!("\x1b[31mError:\x1b[0m {}", e);
                 std::process::exit(1);

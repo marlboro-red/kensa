@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// RGB color representation for config
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -312,6 +313,56 @@ tree_width = 45
 # Start with all folders collapsed in the file tree
 collapse_folders_by_default = false
 "#.to_string()
+    }
+
+    /// Open the config file in the user's preferred editor
+    /// Creates a default config if one doesn't exist
+    pub fn edit() -> Result<(), String> {
+        let path = Self::config_path()
+            .ok_or_else(|| "Could not determine config directory".to_string())?;
+
+        // Create config with defaults if it doesn't exist
+        if !path.exists() {
+            Self::init(false)?;
+            eprintln!(
+                "\x1b[33mCreated new config file at:\x1b[0m {}",
+                path.display()
+            );
+        }
+
+        // Get editor from environment, with platform-specific fallbacks
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| Self::default_editor().to_string());
+
+        eprintln!("Opening {} with {}...", path.display(), editor);
+
+        // Split editor command in case it contains arguments (e.g., "code --wait")
+        let mut parts = editor.split_whitespace();
+        let cmd = parts.next().ok_or("Empty editor command")?;
+        let args: Vec<&str> = parts.collect();
+
+        let status = Command::new(cmd)
+            .args(&args)
+            .arg(&path)
+            .status()
+            .map_err(|e| format!("Failed to open editor '{}': {}", editor, e))?;
+
+        if !status.success() {
+            return Err(format!("Editor exited with status: {}", status));
+        }
+
+        Ok(())
+    }
+
+    /// Get the default editor for the current platform
+    fn default_editor() -> &'static str {
+        if cfg!(windows) {
+            "notepad"
+        } else {
+            // Try common editors, vi is most likely to exist
+            "vi"
+        }
     }
 
     /// Load configuration from file, or return default if not found
