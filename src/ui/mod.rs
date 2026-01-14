@@ -2187,6 +2187,14 @@ impl App {
             .unwrap_or(0)
     }
 
+    /// Get count of pending comments for a file
+    fn pending_comment_count_for_file(&self, file_path: &str) -> usize {
+        self.pending_comments
+            .iter()
+            .filter(|c| c.file_path.as_ref().map(|p| p.as_str()) == Some(file_path))
+            .count()
+    }
+
     /// Get the visual order of thread indices (current threads first, then outdated)
     /// Returns a Vec where each element is the original index in self.comment_threads
     fn thread_visual_order(&self) -> Vec<usize> {
@@ -2606,167 +2614,275 @@ impl App {
 
     fn render_help(&self, frame: &mut ratatui::Frame) {
         let area = frame.area();
+        let bg = Color::Rgb(25, 28, 38);
 
         let popup_height = match self.help_mode {
-            HelpMode::PrList => 18,
-            HelpMode::DiffView => 30, // Increased for horizontal scroll + thread commands
+            HelpMode::PrList => 16,
+            HelpMode::DiffView => 28,
             HelpMode::None => return,
         };
 
-        let popup_area = Self::centered_popup(area, 60, popup_height);
-        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(30, 30, 40));
+        let popup_area = Self::centered_popup(area, 65, popup_height);
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, bg);
 
-        let title = " Keyboard Shortcuts (press any key to close) ";
+        let title = match self.help_mode {
+            HelpMode::PrList => " ⌨ PR List Shortcuts ",
+            HelpMode::DiffView => " ⌨ Diff View Shortcuts ",
+            HelpMode::None => return,
+        };
+
         let block = Block::default()
             .title(title)
+            .title_style(Style::default().fg(Color::Rgb(100, 200, 255)).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(Color::Rgb(70, 80, 100)));
 
         let inner_area = block.inner(popup_area);
         frame.render_widget(block, popup_area);
 
-        let commands: Vec<(&str, &str)> = match self.help_mode {
+        // Group commands by category
+        let commands: Vec<(&str, Vec<(&str, &str)>)> = match self.help_mode {
             HelpMode::PrList => vec![
-                ("j / ↓", "Move down"),
-                ("k / ↑", "Move up"),
-                ("Enter", "Open selected PR"),
-                ("o", "Open PR in browser"),
-                ("Tab / 1 / 2", "Switch tabs (For Review / My PRs)"),
-                ("f", "Cycle repository filter"),
-                ("/", "Search PRs"),
-                ("R", "Refresh PR list"),
-                ("Esc", "Clear filter/search or quit"),
-                ("q", "Quit"),
-                ("?", "Show this help"),
+                ("Navigation", vec![
+                    ("j/k", "Move up/down"),
+                    ("Enter", "Open PR"),
+                    ("Tab", "Switch tabs"),
+                ]),
+                ("Actions", vec![
+                    ("o", "Open in browser"),
+                    ("R", "Refresh list"),
+                    ("f", "Filter by repo"),
+                    ("/", "Search"),
+                ]),
+                ("General", vec![
+                    ("Esc", "Clear filter"),
+                    ("q", "Quit"),
+                ]),
             ],
             HelpMode::DiffView => vec![
-                ("j / ↓", "Move cursor down"),
-                ("k / ↑", "Move cursor up"),
-                ("h / ←", "Previous file"),
-                ("l / →", "Next file"),
-                ("H", "Scroll left (long lines)"),
-                ("L", "Scroll right (long lines)"),
-                ("Tab / Enter", "Toggle focus (tree/diff)"),
-                ("g", "Go to top"),
-                ("G", "Go to bottom"),
-                ("Ctrl+u", "Half page up"),
-                ("Ctrl+d", "Half page down"),
-                ("d", "Toggle unified/split view"),
-                ("x", "Collapse/expand folder"),
-                ("/", "Search files"),
-                ("v", "Enter visual selection mode"),
-                ("c", "Comment on current line/selection"),
-                ("C", "View pending comments"),
-                ("S", "Submit all pending comments"),
-                ("t", "View comment threads"),
-                ("T", "Refresh comment threads"),
-                ("A", "Submit PR review (approve/reject)"),
-                ("o", "Open PR in browser"),
-                ("Esc", "Exit visual mode / go back"),
-                ("q", "Back to PR list / quit"),
-                ("?", "Show this help"),
+                ("Navigation", vec![
+                    ("j/k", "Scroll up/down"),
+                    ("h/l", "Prev/next file"),
+                    ("H/L", "Scroll left/right"),
+                    ("g/G", "Top/bottom"),
+                    ("Ctrl+u/d", "Half page"),
+                ]),
+                ("View", vec![
+                    ("Tab", "Toggle tree/diff"),
+                    ("d", "Toggle split view"),
+                    ("x", "Collapse folder"),
+                    ("/", "Search files"),
+                ]),
+                ("Comments", vec![
+                    ("c", "Add comment"),
+                    ("v", "Visual select"),
+                    ("C", "View drafts"),
+                    ("t", "View threads"),
+                    ("S", "Submit comments"),
+                    ("A", "Submit review"),
+                ]),
+                ("General", vec![
+                    ("o", "Open in browser"),
+                    ("q", "Back/quit"),
+                ]),
             ],
             HelpMode::None => return,
         };
 
         let buf = frame.buffer_mut();
-        let key_style = Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::BOLD);
-        let desc_style = Style::default().fg(Color::White);
+        let mut y = inner_area.y;
 
-        for (i, (key, desc)) in commands.iter().enumerate() {
-            if i as u16 >= inner_area.height {
-                break;
+        for (category, items) in commands {
+            // Category header
+            buf.set_string(
+                inner_area.x + 1,
+                y,
+                category,
+                Style::default()
+                    .fg(Color::Rgb(180, 140, 220))
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+            y += 1;
+
+            // Items in two columns
+            let col_width = (inner_area.width / 2) as usize;
+            for chunk in items.chunks(2) {
+                if y >= inner_area.y + inner_area.height {
+                    break;
+                }
+
+                // Left column
+                if let Some((key, desc)) = chunk.first() {
+                    buf.set_string(
+                        inner_area.x + 2,
+                        y,
+                        key,
+                        Style::default().fg(Color::Rgb(240, 200, 100)).bg(bg),
+                    );
+                    buf.set_string(
+                        inner_area.x + 2 + key.len() as u16 + 1,
+                        y,
+                        desc,
+                        Style::default().fg(Color::Rgb(180, 180, 200)).bg(bg),
+                    );
+                }
+
+                // Right column
+                if let Some((key, desc)) = chunk.get(1) {
+                    buf.set_string(
+                        inner_area.x + col_width as u16 + 1,
+                        y,
+                        key,
+                        Style::default().fg(Color::Rgb(240, 200, 100)).bg(bg),
+                    );
+                    buf.set_string(
+                        inner_area.x + col_width as u16 + 1 + key.len() as u16 + 1,
+                        y,
+                        desc,
+                        Style::default().fg(Color::Rgb(180, 180, 200)).bg(bg),
+                    );
+                }
+                y += 1;
             }
-            let y = inner_area.y + i as u16;
-
-            // Key column (width 16)
-            let key_display = format!("{:>14}  ", key);
-            buf.set_string(
-                inner_area.x,
-                y,
-                &key_display,
-                key_style.bg(Color::Rgb(30, 30, 40)),
-            );
-
-            // Description
-            let desc_x = inner_area.x + 16;
-            let available = (inner_area.width as usize).saturating_sub(16);
-            let desc_truncated: String = desc.chars().take(available).collect();
-            buf.set_string(
-                desc_x,
-                y,
-                &desc_truncated,
-                desc_style.bg(Color::Rgb(30, 30, 40)),
-            );
+            y += 1; // Space between categories
         }
+
+        // Footer hint
+        let hint = "Press any key to close";
+        let hint_x = popup_area.x + (popup_area.width.saturating_sub(hint.len() as u16)) / 2;
+        buf.set_string(
+            hint_x,
+            popup_area.y + popup_area.height - 1,
+            hint,
+            Style::default().fg(Color::Rgb(80, 80, 100)).bg(bg),
+        );
     }
 
     fn render_loading(&self, frame: &mut ratatui::Frame, message: &str) {
         let area = frame.area();
+        let popup_width = 50u16.min(area.width.saturating_sub(4));
+        let popup_area = Self::centered_popup(area, popup_width, 5);
+
+        // Clear popup background
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(30, 35, 50));
+
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan));
+            .border_style(Style::default().fg(Color::Rgb(100, 180, 220)));
 
-        let text = Paragraph::new(message)
-            .block(block)
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Yellow));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
 
-        // Center the loading message
-        let popup_area = Rect {
-            x: area.width / 4,
-            y: area.height / 2 - 1,
-            width: area.width / 2,
-            height: 3,
-        };
+        let buf = frame.buffer_mut();
+        let bg = Color::Rgb(30, 35, 50);
 
-        frame.render_widget(text, popup_area);
+        // Spinner animation (using unicode braille pattern)
+        let spinner = "◐"; // Could rotate through ◐ ◓ ◑ ◒
+        buf.set_string(
+            inner.x + (inner.width / 2).saturating_sub(1),
+            inner.y,
+            spinner,
+            Style::default().fg(Color::Rgb(100, 200, 255)).bg(bg).add_modifier(Modifier::BOLD),
+        );
+
+        // Message
+        let msg_width = message.chars().count() as u16;
+        let msg_x = inner.x + (inner.width.saturating_sub(msg_width)) / 2;
+        buf.set_string(
+            msg_x,
+            inner.y + 2,
+            message,
+            Style::default().fg(Color::Rgb(200, 200, 220)).bg(bg),
+        );
     }
 
     fn render_error(&self, frame: &mut ratatui::Frame, message: &str) {
         let area = frame.area();
+        let popup_width = 60u16.min(area.width.saturating_sub(4));
+        let popup_area = Self::centered_popup(area, popup_width, 7);
+
+        // Clear popup background
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(50, 30, 35));
+
         let block = Block::default()
-            .title(" Error ")
+            .title(" ✗ Error ")
+            .title_style(Style::default().fg(Color::Rgb(255, 100, 100)).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Red));
+            .border_style(Style::default().fg(Color::Rgb(200, 80, 80)));
 
-        let text = Paragraph::new(format!("{}\n\nPress any key to continue", message))
-            .block(block)
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Red));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
 
-        let popup_area = Rect {
-            x: area.width / 6,
-            y: area.height / 2 - 2,
-            width: area.width * 2 / 3,
-            height: 5,
-        };
+        let buf = frame.buffer_mut();
+        let bg = Color::Rgb(50, 30, 35);
 
-        frame.render_widget(text, popup_area);
+        // Wrap message if too long
+        let max_width = inner.width.saturating_sub(2) as usize;
+        let lines: Vec<String> = message
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(max_width)
+            .map(|c| c.iter().collect())
+            .collect();
+
+        for (i, line) in lines.iter().take(3).enumerate() {
+            buf.set_string(
+                inner.x + 1,
+                inner.y + i as u16,
+                line,
+                Style::default().fg(Color::Rgb(255, 180, 180)).bg(bg),
+            );
+        }
+
+        // Continue hint
+        buf.set_string(
+            inner.x + 1,
+            inner.y + inner.height - 1,
+            "Press any key to continue",
+            Style::default().fg(Color::Rgb(150, 100, 100)).bg(bg),
+        );
     }
 
     fn render_success(&self, frame: &mut ratatui::Frame, message: &str) {
         let area = frame.area();
+        let popup_width = 50u16.min(area.width.saturating_sub(4));
+        let popup_area = Self::centered_popup(area, popup_width, 6);
+
+        // Clear popup background
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(30, 50, 40));
+
         let block = Block::default()
-            .title(" Success ")
+            .title(" ✓ Success ")
+            .title_style(Style::default().fg(Color::Rgb(100, 220, 140)).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Green));
+            .border_style(Style::default().fg(Color::Rgb(80, 180, 120)));
 
-        let text = Paragraph::new(format!("{}\n\nPress any key to continue", message))
-            .block(block)
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Green));
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
 
-        let popup_area = Rect {
-            x: area.width / 6,
-            y: area.height / 2 - 2,
-            width: area.width * 2 / 3,
-            height: 5,
-        };
+        let buf = frame.buffer_mut();
+        let bg = Color::Rgb(30, 50, 40);
 
-        frame.render_widget(text, popup_area);
+        // Message
+        let msg_width = message.chars().count() as u16;
+        let msg_x = inner.x + (inner.width.saturating_sub(msg_width)) / 2;
+        buf.set_string(
+            msg_x.max(inner.x),
+            inner.y + 1,
+            message,
+            Style::default().fg(Color::Rgb(180, 255, 200)).bg(bg),
+        );
+
+        // Continue hint
+        let hint = "Press any key to continue";
+        let hint_x = inner.x + (inner.width.saturating_sub(hint.len() as u16)) / 2;
+        buf.set_string(
+            hint_x,
+            inner.y + 3,
+            hint,
+            Style::default().fg(Color::Rgb(100, 140, 110)).bg(bg),
+        );
     }
 
     fn render_pr_list(&self, frame: &mut ratatui::Frame) {
@@ -2774,29 +2890,32 @@ impl App {
         let buf = frame.buffer_mut();
 
         // Render header bar at top
-        let tab_height = 2;
+        let tab_height = 3; // Increased for underline indicator
         let tab_y = area.y;
 
-        // Header bar background
-        let tab_bg = Style::default().bg(Color::Rgb(30, 30, 40));
+        // Header bar background - slightly darker for better contrast
+        let header_bg = Color::Rgb(25, 25, 35);
+        let tab_bg = Style::default().bg(header_bg);
         for x in area.x..area.x + area.width {
             buf.set_string(x, tab_y, " ", tab_bg);
             buf.set_string(x, tab_y + 1, " ", tab_bg);
+            buf.set_string(x, tab_y + 2, " ", Style::default().bg(Color::Rgb(35, 35, 45)));
         }
 
-        let name = "kensa";
+        // App name with icon
+        let name = "◆ kensa";
         let name_style = Style::default()
-            .fg(Color::Magenta)
-            .bg(Color::Rgb(30, 30, 40))
+            .fg(Color::Rgb(180, 140, 255)) // Softer purple
+            .bg(header_bg)
             .add_modifier(Modifier::BOLD);
         buf.set_string(area.x + 1, tab_y, name, name_style);
 
-        // Separator (account for kanji width - each kanji is 2 cells wide)
+        // Separator
         let sep = " │ ";
         let sep_style = Style::default()
-            .fg(Color::DarkGray)
-            .bg(Color::Rgb(30, 30, 40));
-        let name_width: u16 = 4 + 1 + 5; // 2 kanji (2 cells each) + space + "kensa"
+            .fg(Color::Rgb(60, 60, 70))
+            .bg(header_bg);
+        let name_width: u16 = 8; // "◆ kensa"
         buf.set_string(area.x + 1 + name_width, tab_y, sep, sep_style);
 
         let tabs_start = area.x + 1 + name_width + sep.len() as u16;
@@ -2804,79 +2923,97 @@ impl App {
         // Author mode: simple header without tabs
         if let Some(ref author) = self.author_filter {
             let header_style = Style::default()
-                .fg(Color::Cyan)
-                .bg(Color::Rgb(30, 30, 40))
+                .fg(Color::Rgb(100, 200, 255)) // Softer cyan
+                .bg(header_bg)
                 .add_modifier(Modifier::BOLD);
-            let header_text = format!(" @{}'s PRs ({}) ", author, self.filtered_my_pr_indices.len());
+            let header_text = format!("  @{}'s PRs ({}) ", author, self.filtered_my_pr_indices.len());
             buf.set_string(tabs_start, tab_y, &header_text, header_style);
+            // Underline indicator
+            for x in tabs_start..(tabs_start + header_text.len() as u16) {
+                buf.set_string(x, tab_y + 1, "─", Style::default().fg(Color::Rgb(100, 200, 255)).bg(header_bg));
+            }
         } else {
-            // Normal mode: show tabs
+            // Normal mode: show tabs with visual indicators
             // Tab 1: For Review
-            let tab1_style = if self.pr_tab == PrListTab::ForReview {
+            let tab1_active = self.pr_tab == PrListTab::ForReview;
+            let tab1_style = if tab1_active {
                 Style::default()
-                    .fg(Color::Cyan)
-                    .bg(Color::Rgb(30, 30, 40))
+                    .fg(Color::Rgb(100, 200, 255)) // Bright cyan
+                    .bg(header_bg)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-                    .fg(Color::DarkGray)
-                    .bg(Color::Rgb(30, 30, 40))
+                    .fg(Color::Rgb(100, 100, 110))
+                    .bg(header_bg)
             };
             let tab1_text = format!(
-                " [1] For Review ({}) ",
+                " ● For Review ({}) ",
                 self.filtered_review_pr_indices.len()
             );
             buf.set_string(tabs_start, tab_y, &tab1_text, tab1_style);
+            // Underline for active tab
+            if tab1_active {
+                for x in tabs_start..(tabs_start + tab1_text.len() as u16) {
+                    buf.set_string(x, tab_y + 1, "━", Style::default().fg(Color::Rgb(100, 200, 255)).bg(header_bg));
+                }
+            }
 
             // Tab 2: My PRs
-            let tab2_style = if self.pr_tab == PrListTab::MyPrs {
+            let tab2_active = self.pr_tab == PrListTab::MyPrs;
+            let tab2_style = if tab2_active {
                 Style::default()
-                    .fg(Color::Cyan)
-                    .bg(Color::Rgb(30, 30, 40))
+                    .fg(Color::Rgb(100, 200, 255))
+                    .bg(header_bg)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-                    .fg(Color::DarkGray)
-                    .bg(Color::Rgb(30, 30, 40))
+                    .fg(Color::Rgb(100, 100, 110))
+                    .bg(header_bg)
             };
-            let tab2_text = format!(" [2] My PRs ({}) ", self.filtered_my_pr_indices.len());
-            let tab2_x = tabs_start + tab1_text.len() as u16 + 1;
+            let tab2_text = format!(" ○ My PRs ({}) ", self.filtered_my_pr_indices.len());
+            let tab2_x = tabs_start + tab1_text.len() as u16;
             buf.set_string(tab2_x, tab_y, &tab2_text, tab2_style);
+            // Underline for active tab
+            if tab2_active {
+                for x in tab2_x..(tab2_x + tab2_text.len() as u16) {
+                    buf.set_string(x, tab_y + 1, "━", Style::default().fg(Color::Rgb(100, 200, 255)).bg(header_bg));
+                }
+            }
 
-            // Tab hint
-            let hint = "Tab: switch";
+            // Help hint (right-aligned)
+            let hint = "?:help  Tab:switch";
             let hint_x = area.x + area.width - hint.len() as u16 - 2;
             buf.set_string(
                 hint_x,
                 tab_y,
                 hint,
                 Style::default()
-                    .fg(Color::DarkGray)
-                    .bg(Color::Rgb(30, 30, 40)),
+                    .fg(Color::Rgb(80, 80, 90))
+                    .bg(header_bg),
             );
         }
 
-        // Filter/search info on second line
+        // Filter/search info on third line (separator line)
         let filter_info = if self.pr_search_mode {
-            format!(" /{}_ ", self.pr_search_query)
+            format!("  🔍 {}_ ", self.pr_search_query)
         } else {
             let mut info = String::new();
             if let Some(ref repo) = self.repo_filter {
-                info.push_str(&format!(" repo:{} ", repo));
+                info.push_str(&format!(" 📁 {} ", repo));
             }
             if !self.pr_search_query.is_empty() {
-                info.push_str(&format!(" search:{} ", self.pr_search_query));
+                info.push_str(&format!(" 🔍 {} ", self.pr_search_query));
             }
             info
         };
         if !filter_info.is_empty() {
             buf.set_string(
                 area.x + 1,
-                tab_y + 1,
+                tab_y + 2,
                 &filter_info,
                 Style::default()
-                    .fg(Color::Yellow)
-                    .bg(Color::Rgb(30, 30, 40)),
+                    .fg(Color::Rgb(220, 180, 100)) // Warm yellow
+                    .bg(Color::Rgb(35, 35, 45)),
             );
         }
 
@@ -2888,7 +3025,7 @@ impl App {
             height: area.height.saturating_sub(tab_height),
         };
 
-        let border_style = Style::default().fg(Color::Cyan);
+        let border_style = Style::default().fg(Color::Rgb(60, 60, 80));
         let block = Block::default()
             .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
             .border_style(border_style);
@@ -2968,16 +3105,20 @@ impl App {
             if current_repo.as_ref() != Some(&repo) {
                 current_repo = Some(repo.clone());
 
+                let header_bg = Color::Rgb(28, 28, 38);
                 let header_style = Style::default()
-                    .fg(Color::Blue)
+                    .fg(Color::Rgb(130, 160, 200)) // Softer blue
+                    .bg(header_bg)
                     .add_modifier(Modifier::BOLD);
 
                 for x in inner_area.x..inner_area.x + inner_area.width {
-                    buf.set_string(x, y, " ", header_style);
+                    buf.set_string(x, y, " ", Style::default().bg(header_bg));
                 }
 
+                // Repo icon and name
+                let repo_display = format!("  📂 {}", repo);
                 let truncated_repo: String =
-                    repo.chars().take(inner_area.width as usize - 1).collect();
+                    repo_display.chars().take(inner_area.width as usize - 1).collect();
                 buf.set_string(inner_area.x, y, &truncated_repo, header_style);
 
                 row += 1;
@@ -2990,53 +3131,72 @@ impl App {
             let y = inner_area.y + row as u16;
             let is_selected = pr_idx == selected;
 
-            let style = if is_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
+            // Enhanced selection styling
+            let (style, row_bg) = if is_selected {
+                (
+                    Style::default()
+                        .bg(Color::Rgb(50, 60, 80)) // Distinctive blue-gray selection
+                        .fg(Color::Rgb(240, 240, 250))
+                        .add_modifier(Modifier::BOLD),
+                    Color::Rgb(50, 60, 80)
+                )
             } else {
-                Style::default()
+                (
+                    Style::default()
+                        .bg(Color::Rgb(22, 22, 28)) // Subtle row background
+                        .fg(Color::Rgb(200, 200, 210)),
+                    Color::Rgb(22, 22, 28)
+                )
             };
 
-            // Clear line
+            // Clear line with row background
             for x in inner_area.x..inner_area.x + inner_area.width {
-                buf.set_string(x, y, " ", style);
+                buf.set_string(x, y, " ", Style::default().bg(row_bg));
             }
 
             let mut x = inner_area.x;
 
-            // Indent
-            buf.set_string(x, y, "  ", style);
+            // Selection indicator
+            if is_selected {
+                buf.set_string(x, y, " ▸", Style::default().fg(Color::Rgb(100, 200, 255)).bg(row_bg));
+            } else {
+                buf.set_string(x, y, "  ", Style::default().bg(row_bg));
+            }
             x += 2;
 
-            // PR number (accommodate up to 6 digits + spacing)
-            let num_str = format!("#{:<7}", pr.number);
-            buf.set_string(x, y, &num_str, style.fg(self.accent_color()));
-            x += 8;
+            // PR number with better styling
+            let num_str = format!("#{:<6}", pr.number);
+            let num_style = if is_selected {
+                Style::default().fg(Color::Rgb(120, 220, 180)).bg(row_bg).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Rgb(80, 180, 140)).bg(row_bg)
+            };
+            buf.set_string(x, y, &num_str, num_style);
+            x += 7;
 
             // Calculate space for title
-            let author_age = format!("@{} {}", pr.author, pr.age());
+            let author_age = format!("@{} · {}", pr.author, pr.age());
             let author_age_len = author_age.chars().count();
             let title_max_width = (inner_area.x + inner_area.width)
                 .saturating_sub(x)
                 .saturating_sub(author_age_len as u16 + 2)
                 as usize;
 
-            // Title (truncated)
+            // Title (truncated) with better styling
             let title: String = pr.title.chars().take(title_max_width).collect();
             let title_display = if pr.title.chars().count() > title_max_width {
-                format!("{}...", &title[..title.len().saturating_sub(3)])
+                format!("{}…", &title[..title.len().saturating_sub(1)])
             } else {
                 title
             };
             buf.set_string(x, y, &title_display, style);
 
-            // Author and age (right-aligned)
+            // Author and age (right-aligned) with softer styling
             let right_x = inner_area.x + inner_area.width - author_age_len as u16 - 1;
             let author_style = if is_selected {
-                style.fg(Color::Gray) // Lighter color when selected (DarkGray background)
+                Style::default().fg(Color::Rgb(150, 150, 170)).bg(row_bg)
             } else {
-                style.fg(Color::DarkGray)
+                Style::default().fg(Color::Rgb(90, 90, 110)).bg(row_bg)
             };
             buf.set_string(right_x, y, &author_age, author_style);
 
@@ -3065,12 +3225,55 @@ impl App {
 
     fn render_pr_list_footer(&self, frame: &mut ratatui::Frame, area: Rect) {
         let buf = frame.buffer_mut();
-        let help =
-            " j/k:nav  Enter:view  o:browser  f:filter  /:search  R:refresh  ?:help  q:quit ";
         let help_y = area.y + area.height - 1;
-        let help_x = area.x + 1;
-        let help_style = Style::default().fg(Color::DarkGray);
-        buf.set_string(help_x, help_y, help, help_style);
+        let footer_bg = Color::Rgb(25, 25, 32);
+
+        // Fill footer background
+        for x in area.x..area.x + area.width {
+            buf.set_string(x, help_y, " ", Style::default().bg(footer_bg));
+        }
+
+        // Key hints with better formatting
+        let hints = vec![
+            ("j/k", "navigate"),
+            ("Enter", "open"),
+            ("o", "browser"),
+            ("f", "filter"),
+            ("/", "search"),
+            ("R", "refresh"),
+            ("?", "help"),
+        ];
+
+        let mut x = area.x + 1;
+        for (key, action) in hints {
+            // Key
+            buf.set_string(x, help_y, key, Style::default().fg(Color::Rgb(130, 180, 220)).bg(footer_bg));
+            x += key.len() as u16;
+            // Colon
+            buf.set_string(x, help_y, ":", Style::default().fg(Color::Rgb(60, 60, 70)).bg(footer_bg));
+            x += 1;
+            // Action
+            buf.set_string(x, help_y, action, Style::default().fg(Color::Rgb(100, 100, 120)).bg(footer_bg));
+            x += action.len() as u16 + 2;
+
+            if x >= area.x + area.width - 10 {
+                break;
+            }
+        }
+
+        // Show item count on the right
+        let filtered = self.current_filtered_indices();
+        let total = match self.pr_tab {
+            PrListTab::ForReview => self.review_prs.len(),
+            PrListTab::MyPrs => self.my_prs.len(),
+        };
+        let count_str = if filtered.len() == total {
+            format!("{} PRs ", total)
+        } else {
+            format!("{}/{} PRs ", filtered.len(), total)
+        };
+        let count_x = area.x + area.width - count_str.len() as u16 - 1;
+        buf.set_string(count_x, help_y, &count_str, Style::default().fg(Color::Rgb(80, 80, 100)).bg(footer_bg));
     }
 
     fn render_diff_view(&self, frame: &mut ratatui::Frame) {
@@ -3078,7 +3281,7 @@ impl App {
 
         // If we came from PR list, show a header bar with back navigation
         if let Some(ref pr) = self.current_pr {
-            let header_height = 2;
+            let header_height = 3; // Increased for status bar
             let content_area = Rect {
                 x: area.x,
                 y: area.y + header_height,
@@ -3088,56 +3291,172 @@ impl App {
 
             // Render header
             let buf = frame.buffer_mut();
+            let header_bg = Color::Rgb(25, 25, 35);
+            let status_bg = Color::Rgb(30, 30, 42);
 
-            // First line: PR info
-            let pr_info = format!(" {} #{}: {}", pr.repo_full_name(), pr.number, pr.title);
-            let truncated_info: String = pr_info.chars().take(area.width as usize - 1).collect();
-            let info_style = Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD);
-
+            // First line: PR info with repo icon
             for x in area.x..area.x + area.width {
-                buf.set_string(x, area.y, " ", Style::default().bg(Color::Rgb(30, 30, 40)));
+                buf.set_string(x, area.y, " ", Style::default().bg(header_bg));
             }
+
+            // PR number badge
+            let pr_num = format!(" #{} ", pr.number);
             buf.set_string(
-                area.x,
+                area.x + 1,
                 area.y,
-                &truncated_info,
-                info_style.bg(Color::Rgb(30, 30, 40)),
+                &pr_num,
+                Style::default()
+                    .fg(Color::Rgb(25, 25, 35))
+                    .bg(Color::Rgb(100, 200, 255))
+                    .add_modifier(Modifier::BOLD),
             );
 
-            // Show pending comment count on the right
-            if !self.pending_comments.is_empty() {
-                let comment_badge = format!(" {} draft(s) ", self.pending_comments.len());
-                let badge_x = area.x + area.width - comment_badge.len() as u16 - 1;
-                let badge_style = Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD);
-                buf.set_string(badge_x, area.y, &comment_badge, badge_style);
+            // PR title
+            let title_start = area.x + 1 + pr_num.len() as u16 + 1;
+            let max_title_width = (area.width as usize).saturating_sub(title_start as usize + 20);
+            let title: String = pr.title.chars().take(max_title_width).collect();
+            let title_display = if pr.title.chars().count() > max_title_width {
+                format!("{}…", &title[..title.len().saturating_sub(1)])
+            } else {
+                title
+            };
+            buf.set_string(
+                title_start,
+                area.y,
+                &title_display,
+                Style::default().fg(Color::Rgb(220, 220, 230)).bg(header_bg),
+            );
+
+            // Repo name (right side)
+            let repo_str = format!(" {} ", pr.repo_full_name());
+            let repo_x = area.x + area.width - repo_str.len() as u16 - 1;
+            buf.set_string(
+                repo_x,
+                area.y,
+                &repo_str,
+                Style::default().fg(Color::Rgb(100, 100, 120)).bg(header_bg),
+            );
+
+            // Second line: Status bar with position info
+            for x in area.x..area.x + area.width {
+                buf.set_string(x, area.y + 1, " ", Style::default().bg(status_bg));
             }
 
-            // Second line: navigation hints
-            let nav_hint = if self.visual_mode {
-                " -- VISUAL --  v:cancel  c:comment  j/k:extend  ?:help "
-            } else if self.pending_comments.is_empty() {
-                " q:back  o:browser  c:comment  v:visual  /:search  ?:help "
-            } else {
-                " q:back  c:comment  C:drafts  S:submit  ?:help "
-            };
-            let hint_style = Style::default()
-                .fg(Color::Yellow)
-                .bg(Color::Rgb(30, 30, 40));
-
-            for x in area.x..area.x + area.width {
+            // Mode indicator (prominent for visual mode)
+            let mode_x = area.x + 1;
+            if self.visual_mode {
                 buf.set_string(
-                    x,
+                    mode_x,
                     area.y + 1,
-                    " ",
-                    Style::default().bg(Color::Rgb(30, 30, 40)),
+                    " VISUAL ",
+                    Style::default()
+                        .fg(Color::Rgb(25, 25, 35))
+                        .bg(Color::Rgb(255, 180, 100))
+                        .add_modifier(Modifier::BOLD),
+                );
+            } else {
+                let focus_mode = if self.focus == Focus::Tree { "TREE" } else { "DIFF" };
+                buf.set_string(
+                    mode_x,
+                    area.y + 1,
+                    &format!(" {} ", focus_mode),
+                    Style::default()
+                        .fg(Color::Rgb(180, 180, 200))
+                        .bg(Color::Rgb(45, 45, 60)),
                 );
             }
-            buf.set_string(area.x, area.y + 1, nav_hint, hint_style);
+
+            // Line position indicator
+            let line_info = if let Some(file) = self.files.get(self.selected_file) {
+                let total_lines = file.line_count();
+                let current_line = self.diff_cursor + 1;
+                format!(" Ln {}/{} ", current_line.min(total_lines), total_lines)
+            } else {
+                " Ln --/-- ".to_string()
+            };
+            let line_x = area.x + 12;
+            buf.set_string(
+                line_x,
+                area.y + 1,
+                &line_info,
+                Style::default().fg(Color::Rgb(140, 140, 160)).bg(status_bg),
+            );
+
+            // File progress indicator
+            let file_info = format!(" File {}/{} ", self.selected_file + 1, self.files.len());
+            let file_x = line_x + line_info.len() as u16 + 1;
+            buf.set_string(
+                file_x,
+                area.y + 1,
+                &file_info,
+                Style::default().fg(Color::Rgb(140, 140, 160)).bg(status_bg),
+            );
+
+            // View mode indicator
+            let view_mode = match self.view_mode {
+                ViewMode::Unified => " unified ",
+                ViewMode::Split => " split ",
+            };
+            let view_x = file_x + file_info.len() as u16 + 1;
+            buf.set_string(
+                view_x,
+                area.y + 1,
+                view_mode,
+                Style::default().fg(Color::Rgb(100, 180, 140)).bg(status_bg),
+            );
+
+            // Pending comments badge (right side)
+            if !self.pending_comments.is_empty() {
+                let comment_badge = format!(" ✎ {} drafts ", self.pending_comments.len());
+                let badge_x = area.x + area.width - comment_badge.len() as u16 - 1;
+                buf.set_string(
+                    badge_x,
+                    area.y + 1,
+                    &comment_badge,
+                    Style::default()
+                        .fg(Color::Rgb(30, 30, 40))
+                        .bg(Color::Rgb(240, 200, 80))
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+
+            // Third line: Key hints
+            for x in area.x..area.x + area.width {
+                buf.set_string(x, area.y + 2, " ", Style::default().bg(Color::Rgb(22, 22, 28)));
+            }
+
+            let hints = if self.visual_mode {
+                vec![("Esc", "cancel"), ("c", "comment"), ("j/k", "extend")]
+            } else if self.pending_comments.is_empty() {
+                vec![("q", "back"), ("c", "comment"), ("v", "visual"), ("/", "search"), ("?", "help")]
+            } else {
+                vec![("q", "back"), ("c", "comment"), ("C", "drafts"), ("S", "submit"), ("?", "help")]
+            };
+
+            let mut hint_x = area.x + 1;
+            for (key, action) in hints {
+                buf.set_string(
+                    hint_x,
+                    area.y + 2,
+                    key,
+                    Style::default().fg(Color::Rgb(130, 180, 220)).bg(Color::Rgb(22, 22, 28)),
+                );
+                hint_x += key.len() as u16;
+                buf.set_string(
+                    hint_x,
+                    area.y + 2,
+                    ":",
+                    Style::default().fg(Color::Rgb(60, 60, 70)).bg(Color::Rgb(22, 22, 28)),
+                );
+                hint_x += 1;
+                buf.set_string(
+                    hint_x,
+                    area.y + 2,
+                    action,
+                    Style::default().fg(Color::Rgb(100, 100, 120)).bg(Color::Rgb(22, 22, 28)),
+                );
+                hint_x += action.len() as u16 + 2;
+            }
 
             // Render diff content in remaining area
             let tree_width = self.config.navigation.tree_width;
@@ -3152,12 +3471,61 @@ impl App {
             // Render comment overlay if active
             self.render_comment_overlay(frame, area);
         } else {
-            // Direct PR URL mode - no header needed
+            // Direct PR URL mode - minimal header with status bar
+            let header_height = 1;
+            let content_area = Rect {
+                x: area.x,
+                y: area.y + header_height,
+                width: area.width,
+                height: area.height.saturating_sub(header_height),
+            };
+
+            let buf = frame.buffer_mut();
+            let status_bg = Color::Rgb(25, 25, 35);
+
+            // Status bar
+            for x in area.x..area.x + area.width {
+                buf.set_string(x, area.y, " ", Style::default().bg(status_bg));
+            }
+
+            // Mode indicator
+            let focus_mode = if self.focus == Focus::Tree { "TREE" } else { "DIFF" };
+            buf.set_string(
+                area.x + 1,
+                area.y,
+                &format!(" {} ", focus_mode),
+                Style::default()
+                    .fg(Color::Rgb(180, 180, 200))
+                    .bg(Color::Rgb(45, 45, 60)),
+            );
+
+            // Line and file info
+            let line_info = if let Some(file) = self.files.get(self.selected_file) {
+                let total_lines = file.line_count();
+                format!(" Ln {}/{} ", (self.diff_cursor + 1).min(total_lines), total_lines)
+            } else {
+                " Ln --/-- ".to_string()
+            };
+            buf.set_string(
+                area.x + 10,
+                area.y,
+                &line_info,
+                Style::default().fg(Color::Rgb(140, 140, 160)).bg(status_bg),
+            );
+
+            let file_info = format!(" File {}/{} ", self.selected_file + 1, self.files.len());
+            buf.set_string(
+                area.x + 10 + line_info.len() as u16,
+                area.y,
+                &file_info,
+                Style::default().fg(Color::Rgb(140, 140, 160)).bg(status_bg),
+            );
+
             let tree_width = self.config.navigation.tree_width;
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Length(tree_width), Constraint::Min(0)])
-                .split(area);
+                .split(content_area);
 
             self.render_tree(frame, chunks[0]);
             self.render_diff(frame, chunks[1]);
@@ -4413,34 +4781,87 @@ impl App {
 
                     let prefix = self.get_tree_prefix(*depth, *is_last, ancestors_last);
 
-                    let style = if is_selected {
-                        Style::default()
-                            .bg(Color::DarkGray)
-                            .add_modifier(Modifier::BOLD)
+                    // Enhanced selection styling
+                    let (style, row_bg) = if is_selected {
+                        (
+                            Style::default()
+                                .bg(Color::Rgb(50, 60, 80))
+                                .fg(Color::Rgb(240, 240, 250))
+                                .add_modifier(Modifier::BOLD),
+                            Color::Rgb(50, 60, 80)
+                        )
                     } else {
-                        Style::default()
+                        (Style::default(), Color::Reset)
                     };
 
                     // Clear the line first
-                    for x in inner_area.x..inner_area.x + inner_area.width {
-                        buf.set_string(x, y, " ", style);
+                    for cx in inner_area.x..inner_area.x + inner_area.width {
+                        buf.set_string(cx, y, " ", Style::default().bg(row_bg));
                     }
 
                     let mut x = inner_area.x;
                     // Draw prefix
-                    buf.set_string(x, y, &prefix, Style::default().fg(Color::DarkGray));
+                    buf.set_string(x, y, &prefix, Style::default().fg(Color::Rgb(80, 80, 100)).bg(row_bg));
                     x += prefix.chars().count() as u16;
 
-                    // Draw status badge
+                    // Draw status badge with improved colors
                     let badge = format!("{} ", file.status.badge());
-                    buf.set_string(x, y, &badge, Style::default().fg(file.status.color()));
+                    buf.set_string(x, y, &badge, Style::default().fg(file.status.color()).bg(row_bg));
                     x += badge.chars().count() as u16;
 
-                    // Draw file name
-                    let available_width =
-                        (inner_area.x + inner_area.width).saturating_sub(x) as usize;
+                    // Check for pending comments on this file
+                    let pending_count = self.pending_comment_count_for_file(&file.path);
+                    let thread_count = self.comment_threads
+                        .iter()
+                        .filter(|t| t.file_path.as_ref().map(|p| p.as_str()) == Some(&file.path))
+                        .count();
+
+                    // Calculate space for badges at end
+                    let mut end_badges = String::new();
+                    if pending_count > 0 {
+                        end_badges.push_str(&format!(" ✎{}", pending_count));
+                    }
+                    if thread_count > 0 {
+                        end_badges.push_str(&format!(" 💬{}", thread_count));
+                    }
+                    let badges_width = end_badges.chars().count();
+
+                    // Draw file name (reserve space for badges)
+                    let available_width = (inner_area.x + inner_area.width)
+                        .saturating_sub(x)
+                        .saturating_sub(badges_width as u16 + 1) as usize;
                     let truncated_name: String = name.chars().take(available_width).collect();
-                    buf.set_string(x, y, &truncated_name, style);
+                    buf.set_string(x, y, &truncated_name, style.bg(row_bg));
+
+                    // Draw badges at the end
+                    if !end_badges.is_empty() {
+                        let badge_x = inner_area.x + inner_area.width - badges_width as u16 - 1;
+                        let mut bx = badge_x;
+                        if pending_count > 0 {
+                            let draft_badge = format!("✎{}", pending_count);
+                            buf.set_string(
+                                bx,
+                                y,
+                                &draft_badge,
+                                Style::default()
+                                    .fg(Color::Rgb(240, 200, 80))
+                                    .bg(row_bg)
+                                    .add_modifier(Modifier::BOLD),
+                            );
+                            bx += draft_badge.len() as u16 + 1;
+                        }
+                        if thread_count > 0 {
+                            let thread_badge = format!("💬{}", thread_count);
+                            buf.set_string(
+                                bx,
+                                y,
+                                &thread_badge,
+                                Style::default()
+                                    .fg(Color::Rgb(140, 180, 220))
+                                    .bg(row_bg),
+                            );
+                        }
+                    }
                 }
             }
         }
