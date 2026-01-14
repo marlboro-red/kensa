@@ -112,18 +112,60 @@ async fn main() -> Result<()> {
                 let input = input.trim().to_lowercase();
                 if input.is_empty() || input == "y" || input == "yes" {
                     eprintln!("\nUpgrading...\n");
+
+                    // Get current executable path and prepare backup path
+                    // Renaming the running binary allows cargo to install the new one
+                    let current_exe = std::env::current_exe().ok();
+                    let backup_path = current_exe.as_ref().map(|p| p.with_extension("old"));
+
+                    // Rename current executable to allow replacement
+                    let renamed = if let (Some(exe), Some(backup)) =
+                        (&current_exe, &backup_path)
+                    {
+                        // Remove any existing backup first
+                        let _ = std::fs::remove_file(backup);
+                        std::fs::rename(exe, backup).is_ok()
+                    } else {
+                        false
+                    };
+
                     let status = std::process::Command::new("cargo")
-                        .args(["install", "--git", "https://github.com/marlboro-red/kensa", "--force"])
+                        .args([
+                            "install",
+                            "--git",
+                            "https://github.com/marlboro-red/kensa",
+                            "--force",
+                        ])
                         .status();
 
                     match status {
                         Ok(s) if s.success() => {
+                            // Clean up backup file on success
+                            if let Some(ref backup) = backup_path {
+                                let _ = std::fs::remove_file(backup);
+                            }
                             eprintln!("\n\x1b[32mUpgrade complete!\x1b[0m");
                         }
                         Ok(_) => {
+                            // Restore backup on failure
+                            if renamed {
+                                if let (Some(exe), Some(backup)) =
+                                    (&current_exe, &backup_path)
+                                {
+                                    let _ = std::fs::rename(backup, exe);
+                                }
+                            }
                             eprintln!("\n\x1b[31mUpgrade failed.\x1b[0m");
                         }
                         Err(e) => {
+                            // Restore backup on failure
+                            if renamed {
+                                if let (Some(exe), Some(backup)) =
+                                    (&current_exe, &backup_path)
+                                {
+                                    let _ = std::fs::rename(backup, exe);
+                                }
+                            }
                             eprintln!("\n\x1b[31mFailed to run cargo: {}\x1b[0m", e);
                         }
                     }
