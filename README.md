@@ -107,11 +107,14 @@ See [`config.toml.example`](config.toml.example) for a complete example with all
 
 ```toml
 [display]
-show_line_numbers = true      # Show line numbers in diff view
-default_view_mode = "unified" # "unified" or "split"
-syntax_highlighting = true    # Enable syntax highlighting
-min_brightness = 180          # Minimum color brightness (0-255)
+show_line_numbers = true              # Show line numbers in diff view
+default_view_mode = "unified"         # "unified" or "split"
+syntax_highlighting = true            # Enable syntax highlighting
+min_brightness = 180                  # Minimum color brightness (0-255)
+theme = "base16-eighties.dark"        # Syntax highlighting theme
 ```
+
+Available themes: `base16-ocean.dark`, `base16-eighties.dark`, `base16-mocha.dark`, `base16-ocean.light`, `InspiredGitHub`, `Solarized (dark)`, `Solarized (light)`
 
 ### Diff Colors
 

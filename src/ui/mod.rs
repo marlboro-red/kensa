@@ -230,7 +230,7 @@ impl App {
         } else {
             ViewMode::Unified
         };
-        let highlighter = Highlighter::with_min_brightness(config.display.min_brightness);
+        let highlighter = Highlighter::with_options(config.display.min_brightness, &config.display.theme);
 
         // Initialize collapsed folders based on config
         let (collapsed_folders, selected_tree_item) =
@@ -353,7 +353,7 @@ impl App {
         } else {
             ViewMode::Unified
         };
-        let highlighter = Highlighter::with_min_brightness(config.display.min_brightness);
+        let highlighter = Highlighter::with_options(config.display.min_brightness, &config.display.theme);
 
         Self {
             screen: Screen::PrList,
