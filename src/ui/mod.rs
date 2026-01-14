@@ -2761,7 +2761,9 @@ impl App {
 
     fn render_loading(&self, frame: &mut ratatui::Frame, message: &str) {
         let area = frame.area();
-        let popup_width = 50u16.min(area.width.saturating_sub(4));
+        // Size popup based on message length, with min/max bounds
+        let msg_len = message.chars().count() as u16;
+        let popup_width = (msg_len + 4).clamp(30, area.width.saturating_sub(4));
         let popup_area = Self::centered_popup(area, popup_width, 5);
 
         // Clear popup background
@@ -2786,13 +2788,19 @@ impl App {
             Style::default().fg(Color::Rgb(100, 200, 255)).bg(bg).add_modifier(Modifier::BOLD),
         );
 
-        // Message
-        let msg_width = message.chars().count() as u16;
-        let msg_x = inner.x + (inner.width.saturating_sub(msg_width)) / 2;
+        // Message (truncate if needed)
+        let max_msg_width = inner.width.saturating_sub(2) as usize;
+        let display_msg: String = if message.chars().count() > max_msg_width {
+            message.chars().take(max_msg_width.saturating_sub(1)).collect::<String>() + "…"
+        } else {
+            message.to_string()
+        };
+        let display_width = display_msg.chars().count() as u16;
+        let msg_x = inner.x + (inner.width.saturating_sub(display_width)) / 2;
         buf.set_string(
             msg_x,
             inner.y + 2,
-            message,
+            &display_msg,
             Style::default().fg(Color::Rgb(200, 200, 220)).bg(bg),
         );
     }
