@@ -50,6 +50,13 @@ kensa https://github.com/owner/repo/pull/123
 # List PRs by a specific GitHub user
 kensa --user <username>
 kensa -u <username>
+
+# Generate default config file
+kensa --init-config
+
+# Open config in your editor
+kensa --edit-config
+kensa -e
 ```
 
 ## Key Bindings
@@ -104,6 +111,17 @@ kensa -u <username>
 kensa can be configured via a TOML file at:
 - **Linux/macOS:** `~/.config/kensa/config.toml`
 - **Windows:** `%APPDATA%\Roaming\kensa\config.toml`
+
+### Quick Setup
+
+```bash
+# Generate a default config file with all options documented
+kensa --init-config
+
+# Open config in your editor ($EDITOR or $VISUAL)
+kensa --edit-config
+kensa -e
+```
 
 See [`config.toml.example`](config.toml.example) for a complete example with all options.
 
