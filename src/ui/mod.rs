@@ -2982,10 +2982,10 @@ impl App {
             buf.set_string(x, y, "  ", style);
             x += 2;
 
-            // PR number
-            let num_str = format!("#{:<5}", pr.number);
+            // PR number (accommodate up to 6 digits + spacing)
+            let num_str = format!("#{:<7}", pr.number);
             buf.set_string(x, y, &num_str, style.fg(self.accent_color()));
-            x += 6;
+            x += 8;
 
             // Calculate space for title
             let author_age = format!("@{} {}", pr.author, pr.age());
