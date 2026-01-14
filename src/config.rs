@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// RGB color representation for config
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -169,8 +170,199 @@ impl Default for LanguageConfig {
 
 impl Config {
     /// Get the config file path (~/.config/kensa/config.toml)
-    fn config_path() -> Option<PathBuf> {
+    pub fn config_path() -> Option<PathBuf> {
         dirs::config_dir().map(|p| p.join("kensa").join("config.toml"))
+    }
+
+    /// Initialize a new config file with default settings
+    /// Returns Ok(path) on success, or an error message
+    pub fn init(force: bool) -> Result<PathBuf, String> {
+        let path = Self::config_path()
+            .ok_or_else(|| "Could not determine config directory".to_string())?;
+
+        // Check if config already exists
+        if path.exists() && !force {
+            return Err(format!(
+                "Config file already exists at: {}\nUse --force to overwrite",
+                path.display()
+            ));
+        }
+
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create config directory: {}", e))?;
+        }
+
+        // Write the default config with documentation
+        let config_content = Self::default_config_content();
+        fs::write(&path, config_content)
+            .map_err(|e| format!("Failed to write config file: {}", e))?;
+
+        Ok(path)
+    }
+
+    /// Generate the default config file content with documentation
+    fn default_config_content() -> String {
+        r#"# Kensa Configuration File
+# Generated with: kensa --init-config
+# All settings are optional - defaults will be used for any missing values.
+
+# =============================================================================
+# INDENTATION SETTINGS
+# =============================================================================
+
+# Default tab width used when no language-specific setting exists
+# Set to 0 to preserve tabs as-is (no expansion)
+default_tab_width = 4
+
+# Language-specific tab width settings
+# The key is the file extension (without the dot)
+[languages.go]
+tab_width = 8
+
+[languages.py]
+tab_width = 4
+
+[languages.rs]
+tab_width = 4
+
+[languages.js]
+tab_width = 2
+
+[languages.ts]
+tab_width = 2
+
+[languages.yaml]
+tab_width = 2
+
+[languages.yml]
+tab_width = 2
+
+# Preserve tabs in Makefiles (tab_width = 0 disables expansion)
+[languages.mk]
+tab_width = 0
+
+# =============================================================================
+# DISPLAY SETTINGS
+# =============================================================================
+
+[display]
+# Show line numbers in the diff view
+show_line_numbers = true
+
+# Default view mode: "unified" or "split"
+# Press 'v' during review to toggle between modes
+default_view_mode = "unified"
+
+# Enable syntax highlighting for code
+syntax_highlighting = true
+
+# Minimum brightness for syntax colors (0-255)
+# Higher values make colors more visible on dark backgrounds
+min_brightness = 180
+
+# Syntax highlighting theme
+# Available themes:
+#   - base16-ocean.dark
+#   - base16-eighties.dark (default)
+#   - base16-mocha.dark
+#   - base16-ocean.light
+#   - InspiredGitHub
+#   - Solarized (dark)
+#   - Solarized (light)
+theme = "base16-eighties.dark"
+
+# =============================================================================
+# DIFF COLORS (RGB values: 0-255)
+# =============================================================================
+
+[colors]
+# Background color for added lines (default: dark green)
+add_bg = { r = 30, g = 60, b = 30 }
+
+# Background color for deleted lines (default: dark red)
+del_bg = { r = 60, g = 30, b = 30 }
+
+# Background color for context lines (default: dark gray)
+context_bg = { r = 22, g = 22, b = 22 }
+
+# Background color for the cursor line (default: dark blue)
+cursor_bg = { r = 45, g = 45, b = 65 }
+
+# Gutter color for the cursor line (default: light blue)
+cursor_gutter = { r = 100, g = 100, b = 180 }
+
+# Accent color for highlights, PR numbers, focused borders (default: green)
+accent = { r = 0, g = 255, b = 135 }
+
+# =============================================================================
+# NAVIGATION SETTINGS
+# =============================================================================
+
+[navigation]
+# Number of lines to scroll with Page Up/Down (Ctrl+u/Ctrl+d)
+scroll_lines = 15
+
+# Number of columns to scroll horizontally with h/l
+horizontal_scroll_columns = 10
+
+# Width of the file tree panel in characters
+tree_width = 45
+
+# Start with all folders collapsed in the file tree
+collapse_folders_by_default = false
+"#.to_string()
+    }
+
+    /// Open the config file in the user's preferred editor
+    /// Creates a default config if one doesn't exist
+    pub fn edit() -> Result<(), String> {
+        let path = Self::config_path()
+            .ok_or_else(|| "Could not determine config directory".to_string())?;
+
+        // Create config with defaults if it doesn't exist
+        if !path.exists() {
+            Self::init(false)?;
+            eprintln!(
+                "\x1b[33mCreated new config file at:\x1b[0m {}",
+                path.display()
+            );
+        }
+
+        // Get editor from environment, with platform-specific fallbacks
+        let editor = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| Self::default_editor().to_string());
+
+        eprintln!("Opening {} with {}...", path.display(), editor);
+
+        // Split editor command in case it contains arguments (e.g., "code --wait")
+        let mut parts = editor.split_whitespace();
+        let cmd = parts.next().ok_or("Empty editor command")?;
+        let args: Vec<&str> = parts.collect();
+
+        let status = Command::new(cmd)
+            .args(&args)
+            .arg(&path)
+            .status()
+            .map_err(|e| format!("Failed to open editor '{}': {}", editor, e))?;
+
+        if !status.success() {
+            return Err(format!("Editor exited with status: {}", status));
+        }
+
+        Ok(())
+    }
+
+    /// Get the default editor for the current platform
+    fn default_editor() -> &'static str {
+        if cfg!(windows) {
+            "notepad"
+        } else {
+            // Try common editors, vi is most likely to exist
+            "vi"
+        }
     }
 
     /// Load configuration from file, or return default if not found
