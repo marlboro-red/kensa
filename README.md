@@ -20,24 +20,6 @@ cd kensa
 cargo install --path .
 ```
 
-## Updating
-
-kensa automatically checks for updates once per day and will notify you if a new version is available.
-
-To check for updates and upgrade:
-
-```bash
-kensa --upgrade
-```
-
-If an update is available, you'll be prompted to install it automatically.
-
-To disable automatic upgrade checks:
-
-```bash
-kensa --no-upgrade-check
-```
-
 ## Usage
 
 ```bash
@@ -57,6 +39,9 @@ kensa --init-config
 # Open config in your editor
 kensa --edit-config
 kensa -e
+
+# Check for version upgrades
+kensa --upgrade
 ```
 
 ## Key Bindings
@@ -106,7 +91,6 @@ kensa -e
 - Batch comment submission (single API call)
 - File tree navigation
 - Vim-style keybindings
-- Automatic update notifications
 
 ## Configuration
 
