@@ -106,3 +106,6 @@ tree_width = 45
 
 # Start with all folders collapsed in the file tree
 collapse_folders_by_default = false
+
+# Show confirmation dialog before quitting (q/Esc)
+confirm_quit = true
