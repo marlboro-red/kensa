@@ -88,7 +88,7 @@ pub async fn fetch_pr_diff(pr: &PrInfo) -> Result<String> {
         return Err(anyhow!("Failed to fetch diff: {}", stderr));
     }
 
-    let diff = String::from_utf8(output.stdout).context("Invalid UTF-8 in diff")?;
+    let diff = String::from_utf8_lossy(&output.stdout).into_owned();
 
     if diff.is_empty() {
         return Err(anyhow!("PR has no changes"));
