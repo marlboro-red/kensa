@@ -2212,6 +2212,18 @@ impl App {
         self.scroll_offset += amount;
     }
 
+<<<<<<< Updated upstream
+=======
+    /// Request to quit the application, respecting the confirm_quit config setting
+    fn request_quit(&mut self) {
+        if self.config.navigation.confirm_quit {
+            self.confirm_quit = true;
+        } else {
+            self.should_quit = true;
+        }
+    }
+
+>>>>>>> Stashed changes
     fn render(&self, frame: &mut ratatui::Frame) {
         // Show loading/error overlay if active
         match &self.loading {
