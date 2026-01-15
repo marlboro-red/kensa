@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::ReviewPr;
 
@@ -8,6 +9,34 @@ use crate::types::ReviewPr;
 pub struct PrCache {
     pub review_prs: Vec<ReviewPr>,
     pub my_prs: Vec<ReviewPr>,
+    /// Unix timestamp when cache was saved
+    #[serde(default)]
+    pub cached_at: u64,
+}
+
+impl PrCache {
+    /// Returns how many seconds ago the cache was saved
+    pub fn age_seconds(&self) -> u64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now.saturating_sub(self.cached_at)
+    }
+
+    /// Returns a human-readable age string like "2m ago" or "1h ago"
+    pub fn age_display(&self) -> String {
+        let secs = self.age_seconds();
+        if secs < 60 {
+            format!("{}s ago", secs)
+        } else if secs < 3600 {
+            format!("{}m ago", secs / 60)
+        } else if secs < 86400 {
+            format!("{}h ago", secs / 3600)
+        } else {
+            format!("{}d ago", secs / 86400)
+        }
+    }
 }
 
 /// Get the cache file path (~/.config/kensa/cache.json)
@@ -26,9 +55,15 @@ pub fn save_cache(review_prs: &[ReviewPr], my_prs: &[ReviewPr]) {
         let _ = fs::create_dir_all(parent);
     }
 
+    let cached_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
     let cache = PrCache {
         review_prs: review_prs.to_vec(),
         my_prs: my_prs.to_vec(),
+        cached_at,
     };
 
     if let Ok(json) = serde_json::to_string(&cache) {

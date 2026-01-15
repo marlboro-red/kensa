@@ -322,14 +322,17 @@ async fn main() -> Result<()> {
         // Try to load from cache for instant startup
         if let Some(cached) = cache::load_cache() {
             perf_log("loaded from cache", startup_start.elapsed().as_millis());
+            let cache_age = cached.age_display();
             eprintln!(
-                "Loaded {} PRs for review, {} of your PRs from cache. Refreshing...",
+                "Loaded {} PRs for review, {} of your PRs from cache ({}). Refreshing...",
                 cached.review_prs.len(),
-                cached.my_prs.len()
+                cached.my_prs.len(),
+                cache_age
             );
 
             // Start app with cached data, it will refresh in background
             let mut app = App::new_with_prs(cached.review_prs, cached.my_prs);
+            app.set_cache_age(cache_age);
             app.trigger_background_refresh();
             app.run()?;
         } else {

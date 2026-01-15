@@ -121,6 +121,10 @@ pub struct App {
     // Cached tree structure to avoid rebuilding on every navigation
     cached_tree: Option<Vec<TreeNode>>,
     cached_flat_items: Option<Vec<TreeItem>>,
+
+    // Background refresh state
+    background_refreshing: bool,
+    cache_age: Option<String>,
 }
 
 impl App {
@@ -224,6 +228,9 @@ impl App {
 
             cached_tree: None,
             cached_flat_items: None,
+
+            background_refreshing: false,
+            cache_age: None,
         }
     }
 
@@ -338,6 +345,9 @@ impl App {
 
             cached_tree: None,
             cached_flat_items: None,
+
+            background_refreshing: false,
+            cache_age: None,
         }
     }
 
@@ -516,9 +526,12 @@ impl App {
                             self.repo_filter = None;
                             self.repo_filter_index = 0;
                             self.loading = LoadingState::Idle;
+                            self.background_refreshing = false;
+                            self.cache_age = None; // Data is now fresh
                         }
                         Err(e) => {
                             self.loading = LoadingState::Error(e);
+                            self.background_refreshing = false;
                         }
                     }
                     self.pr_list_receiver = None;
@@ -1588,9 +1601,15 @@ impl App {
         });
     }
 
+    /// Set the cache age display string
+    pub fn set_cache_age(&mut self, age: String) {
+        self.cache_age = Some(age);
+    }
+
     /// Trigger a background refresh without showing loading state
     /// Used when starting with cached data
     pub fn trigger_background_refresh(&mut self) {
+        self.background_refreshing = true;
         let (tx, rx) = mpsc::channel();
         self.pr_list_receiver = Some(rx);
 
@@ -2767,6 +2786,33 @@ impl App {
             // Help hint (right-aligned)
             let hint = "?:help  Tab:switch";
             let hint_x = area.x + area.width - hint.len() as u16 - 2;
+            let mut status_end_x = hint_x - 2;
+
+            // Show refreshing indicator
+            if self.background_refreshing {
+                let text = "refreshing...";
+                let text_x = status_end_x - text.len() as u16;
+                buf.set_string(
+                    text_x,
+                    tab_y,
+                    text,
+                    Style::default().fg(Color::Rgb(100, 200, 255)).bg(header_bg),
+                );
+                status_end_x = text_x - 1;
+            }
+
+            // Show cache age
+            if let Some(ref age) = self.cache_age {
+                let text = format!("cached {}", age);
+                let text_x = status_end_x - text.len() as u16;
+                buf.set_string(
+                    text_x,
+                    tab_y,
+                    &text,
+                    Style::default().fg(Color::Rgb(100, 100, 110)).bg(header_bg),
+                );
+            }
+
             buf.set_string(
                 hint_x,
                 tab_y,
