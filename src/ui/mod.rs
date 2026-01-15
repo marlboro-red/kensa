@@ -514,15 +514,52 @@ impl App {
                                 .collect();
                             repos.sort();
 
+                            // Remember currently selected PRs to restore position
+                            let selected_review = self.filtered_review_pr_indices
+                                .get(self.selected_review_pr)
+                                .and_then(|&i| self.review_prs.get(i))
+                                .map(|pr| (pr.repo_full_name(), pr.number));
+                            let selected_my = self.filtered_my_pr_indices
+                                .get(self.selected_my_pr)
+                                .and_then(|&i| self.my_prs.get(i))
+                                .map(|pr| (pr.repo_full_name(), pr.number));
+
                             self.review_prs = review_prs;
                             self.my_prs = my_prs;
                             self.available_repos = repos;
                             self.filtered_review_pr_indices = (0..review_count).collect();
                             self.filtered_my_pr_indices = (0..my_count).collect();
-                            self.selected_review_pr = 0;
-                            self.selected_my_pr = 0;
-                            self.review_pr_scroll = 0;
-                            self.my_pr_scroll = 0;
+
+                            // Restore selection if the PR still exists
+                            if let Some((repo, num)) = selected_review {
+                                if let Some(pos) = self.review_prs.iter().position(|pr| pr.repo_full_name() == repo && pr.number == num) {
+                                    self.selected_review_pr = pos;
+                                    // Keep scroll near selection
+                                    if self.selected_review_pr < self.review_pr_scroll {
+                                        self.review_pr_scroll = self.selected_review_pr;
+                                    }
+                                } else {
+                                    self.selected_review_pr = self.selected_review_pr.min(review_count.saturating_sub(1));
+                                }
+                            } else {
+                                self.selected_review_pr = 0;
+                                self.review_pr_scroll = 0;
+                            }
+
+                            if let Some((repo, num)) = selected_my {
+                                if let Some(pos) = self.my_prs.iter().position(|pr| pr.repo_full_name() == repo && pr.number == num) {
+                                    self.selected_my_pr = pos;
+                                    if self.selected_my_pr < self.my_pr_scroll {
+                                        self.my_pr_scroll = self.selected_my_pr;
+                                    }
+                                } else {
+                                    self.selected_my_pr = self.selected_my_pr.min(my_count.saturating_sub(1));
+                                }
+                            } else {
+                                self.selected_my_pr = 0;
+                                self.my_pr_scroll = 0;
+                            }
+
                             self.repo_filter = None;
                             self.repo_filter_index = 0;
                             self.loading = LoadingState::Idle;
