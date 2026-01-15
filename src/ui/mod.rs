@@ -122,6 +122,10 @@ pub struct App {
     // Cached tree structure to avoid rebuilding on every navigation
     cached_tree: Option<Vec<TreeNode>>,
     cached_flat_items: Option<Vec<TreeItem>>,
+
+    // Background refresh state
+    background_refreshing: bool,
+    cache_age: Option<String>,
 }
 
 impl App {
@@ -226,6 +230,9 @@ impl App {
 
             cached_tree: None,
             cached_flat_items: None,
+
+            background_refreshing: false,
+            cache_age: None,
         }
     }
 
@@ -341,6 +348,9 @@ impl App {
 
             cached_tree: None,
             cached_flat_items: None,
+
+            background_refreshing: false,
+            cache_age: None,
         }
     }
 
@@ -507,21 +517,61 @@ impl App {
                                 .collect();
                             repos.sort();
 
+                            // Remember currently selected PRs to restore position
+                            let selected_review = self.filtered_review_pr_indices
+                                .get(self.selected_review_pr)
+                                .and_then(|&i| self.review_prs.get(i))
+                                .map(|pr| (pr.repo_full_name(), pr.number));
+                            let selected_my = self.filtered_my_pr_indices
+                                .get(self.selected_my_pr)
+                                .and_then(|&i| self.my_prs.get(i))
+                                .map(|pr| (pr.repo_full_name(), pr.number));
+
                             self.review_prs = review_prs;
                             self.my_prs = my_prs;
                             self.available_repos = repos;
                             self.filtered_review_pr_indices = (0..review_count).collect();
                             self.filtered_my_pr_indices = (0..my_count).collect();
-                            self.selected_review_pr = 0;
-                            self.selected_my_pr = 0;
-                            self.review_pr_scroll = 0;
-                            self.my_pr_scroll = 0;
+
+                            // Restore selection if the PR still exists
+                            if let Some((repo, num)) = selected_review {
+                                if let Some(pos) = self.review_prs.iter().position(|pr| pr.repo_full_name() == repo && pr.number == num) {
+                                    self.selected_review_pr = pos;
+                                    // Keep scroll near selection
+                                    if self.selected_review_pr < self.review_pr_scroll {
+                                        self.review_pr_scroll = self.selected_review_pr;
+                                    }
+                                } else {
+                                    self.selected_review_pr = self.selected_review_pr.min(review_count.saturating_sub(1));
+                                }
+                            } else {
+                                self.selected_review_pr = 0;
+                                self.review_pr_scroll = 0;
+                            }
+
+                            if let Some((repo, num)) = selected_my {
+                                if let Some(pos) = self.my_prs.iter().position(|pr| pr.repo_full_name() == repo && pr.number == num) {
+                                    self.selected_my_pr = pos;
+                                    if self.selected_my_pr < self.my_pr_scroll {
+                                        self.my_pr_scroll = self.selected_my_pr;
+                                    }
+                                } else {
+                                    self.selected_my_pr = self.selected_my_pr.min(my_count.saturating_sub(1));
+                                }
+                            } else {
+                                self.selected_my_pr = 0;
+                                self.my_pr_scroll = 0;
+                            }
+
                             self.repo_filter = None;
                             self.repo_filter_index = 0;
                             self.loading = LoadingState::Idle;
+                            self.background_refreshing = false;
+                            self.cache_age = None; // Data is now fresh
                         }
                         Err(e) => {
                             self.loading = LoadingState::Error(e);
+                            self.background_refreshing = false;
                         }
                     }
                     self.pr_list_receiver = None;
@@ -1605,6 +1655,41 @@ impl App {
         });
     }
 
+    /// Set the cache age display string
+    pub fn set_cache_age(&mut self, age: String) {
+        self.cache_age = Some(age);
+    }
+
+    /// Trigger a background refresh without showing loading state
+    /// Used when starting with cached data
+    pub fn trigger_background_refresh(&mut self) {
+        self.background_refreshing = true;
+        let (tx, rx) = mpsc::channel();
+        self.pr_list_receiver = Some(rx);
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(async {
+                let (review_result, my_result) = tokio::join!(
+                    crate::github::fetch_review_prs(),
+                    crate::github::fetch_my_prs()
+                );
+
+                match (review_result, my_result) {
+                    (Ok(review_prs), Ok(my_prs)) => {
+                        // Save to cache
+                        crate::cache::save_cache(&review_prs, &my_prs);
+                        Ok((review_prs, my_prs))
+                    }
+                    (Err(e), _) => Err(e.to_string()),
+                    (_, Err(e)) => Err(e.to_string()),
+                }
+            });
+
+            let _ = tx.send(result);
+        });
+    }
+
     fn refresh_pr_list(&mut self) {
         // Non-blocking async refresh - results are processed in event_loop
         self.loading = LoadingState::Loading("Refreshing PRs...".to_string());
@@ -1622,7 +1707,11 @@ impl App {
                 );
 
                 match (review_result, my_result) {
-                    (Ok(review_prs), Ok(my_prs)) => Ok((review_prs, my_prs)),
+                    (Ok(review_prs), Ok(my_prs)) => {
+                        // Save to cache
+                        crate::cache::save_cache(&review_prs, &my_prs);
+                        Ok((review_prs, my_prs))
+                    }
                     (Err(e), _) => Err(e.to_string()),
                     (_, Err(e)) => Err(e.to_string()),
                 }
@@ -2806,6 +2895,33 @@ impl App {
             // Help hint (right-aligned)
             let hint = "?:help  Tab:switch";
             let hint_x = area.x + area.width - hint.len() as u16 - 2;
+            let mut status_end_x = hint_x - 2;
+
+            // Show refreshing indicator
+            if self.background_refreshing {
+                let text = "refreshing...";
+                let text_x = status_end_x - text.len() as u16;
+                buf.set_string(
+                    text_x,
+                    tab_y,
+                    text,
+                    Style::default().fg(Color::Rgb(100, 200, 255)).bg(header_bg),
+                );
+                status_end_x = text_x - 1;
+            }
+
+            // Show cache age
+            if let Some(ref age) = self.cache_age {
+                let text = format!("cached {}", age);
+                let text_x = status_end_x - text.len() as u16;
+                buf.set_string(
+                    text_x,
+                    tab_y,
+                    &text,
+                    Style::default().fg(Color::Rgb(100, 100, 110)).bg(header_bg),
+                );
+            }
+
             buf.set_string(
                 hint_x,
                 tab_y,

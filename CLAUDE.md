@@ -15,7 +15,7 @@ cargo run                # Run debug build
 cargo install --path .   # Install locally
 ```
 
-**Always run `cargo build --release` after making changes to verify the code compiles.**
+**Always run `cargo build` after making changes to verify the code compiles.** Use `cargo run` to test.
 
 ## Testing
 

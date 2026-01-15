@@ -1,3 +1,4 @@
+mod cache;
 mod config;
 mod drafts;
 mod github;
@@ -9,12 +10,52 @@ mod update;
 
 use anyhow::Result;
 use clap::Parser;
+use std::time::Instant;
 
 use crate::config::Config;
 use crate::github::{check_gh_cli, fetch_my_prs, fetch_pr_details, fetch_pr_diff, fetch_prs_by_author, fetch_review_prs, parse_pr_url};
 use crate::parser::parse_diff;
 use crate::ui::App;
 use crate::update::check_for_update;
+
+/// Get path to perf log file
+fn perf_log_path() -> Option<std::path::PathBuf> {
+    let mut path = dirs::config_dir()?;
+    path.push("kensa");
+    let _ = std::fs::create_dir_all(&path);
+    path.push("perf.log");
+    Some(path)
+}
+
+/// Write a new session header to the perf log
+fn perf_log_start() {
+    if std::env::var("KENSA_DEBUG").is_ok() {
+        use std::io::Write;
+        if let Some(path) = perf_log_path() {
+            // Truncate the file for a fresh log each run
+            if let Ok(mut file) = std::fs::File::create(&path) {
+                let _ = writeln!(file, "=== kensa perf log ===\n");
+            }
+        }
+    }
+}
+
+/// Log performance timing to file if KENSA_DEBUG is set
+#[inline]
+fn perf_log(operation: &str, elapsed_ms: u128) {
+    if std::env::var("KENSA_DEBUG").is_ok() {
+        use std::io::Write;
+        if let Some(path) = perf_log_path() {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(file, "{:>6}ms  {}", elapsed_ms, operation);
+            }
+        }
+    }
+}
 
 const LOGO: &str = r#"
   検査
@@ -203,20 +244,36 @@ async fn main() -> Result<()> {
     // Show logo
     eprintln!("{}", LOGO);
 
-    // Check gh CLI is available
-    check_gh_cli().await?;
+    // Initialize perf logging (clears previous log)
+    perf_log_start();
+    if std::env::var("KENSA_DEBUG").is_ok() {
+        if let Some(path) = perf_log_path() {
+            eprintln!("Perf log: {}", path.display());
+        }
+    }
+
+    let startup_start = Instant::now();
 
     if let Some(username) = args.user {
         // User mode - show PRs by that user
         eprintln!("Fetching PRs by @{}...", username);
 
-        let prs = fetch_prs_by_author(&username).await?;
+        // Run auth check in parallel with fetch
+        let fetch_start = Instant::now();
+        let (auth_result, prs_result) = tokio::join!(
+            check_gh_cli(),
+            fetch_prs_by_author(&username)
+        );
+        auth_result?;
+        let prs = prs_result?;
+        perf_log("fetch_prs_by_author", fetch_start.elapsed().as_millis());
 
         if prs.is_empty() {
             eprintln!("No open PRs found for @{}", username);
             return Ok(());
         }
 
+        perf_log("startup (total)", startup_start.elapsed().as_millis());
         eprintln!(
             "Found {} PRs by @{}. Starting viewer...",
             prs.len(),
@@ -233,49 +290,86 @@ async fn main() -> Result<()> {
             pr_info.number, pr_info.owner, pr_info.repo
         );
 
-        // Fetch diff and PR details concurrently
-        let (diff_result, details_result) = tokio::join!(
+        // Fetch auth, diff and PR details concurrently
+        let fetch_start = Instant::now();
+        let (auth_result, diff_result, details_result) = tokio::join!(
+            check_gh_cli(),
             fetch_pr_diff(&pr_info),
             fetch_pr_details(&pr_info)
         );
+        auth_result?;
+        perf_log("fetch PR (diff + details)", fetch_start.elapsed().as_millis());
 
         let diff_content = diff_result?;
         let pr = details_result?;
+
+        let parse_start = Instant::now();
         let files = parse_diff(&diff_content);
+        perf_log("parse_diff", parse_start.elapsed().as_millis());
 
         if files.is_empty() {
             eprintln!("No files found in diff");
             return Ok(());
         }
 
+        perf_log("startup (total)", startup_start.elapsed().as_millis());
         eprintln!("Found {} files. Starting viewer...", files.len());
 
         let mut app = App::new_with_pr(files, pr);
         app.run()?;
     } else {
         // PR list mode - show PRs awaiting review and my PRs
-        eprintln!("Fetching PRs...");
+        // Try to load from cache for instant startup
+        if let Some(cached) = cache::load_cache() {
+            perf_log("loaded from cache", startup_start.elapsed().as_millis());
+            let cache_age = cached.age_display();
+            eprintln!(
+                "Loaded {} PRs for review, {} of your PRs from cache ({}). Refreshing...",
+                cached.review_prs.len(),
+                cached.my_prs.len(),
+                cache_age
+            );
 
-        // Fetch both lists concurrently
-        let (review_prs, my_prs) = tokio::join!(fetch_review_prs(), fetch_my_prs());
+            // Start app with cached data, it will refresh in background
+            let mut app = App::new_with_prs(cached.review_prs, cached.my_prs);
+            app.set_cache_age(cache_age);
+            app.trigger_background_refresh();
+            app.run()?;
+        } else {
+            // No cache - fetch normally
+            eprintln!("Fetching PRs...");
 
-        let review_prs = review_prs?;
-        let my_prs = my_prs?;
+            let fetch_start = Instant::now();
+            let (auth_result, review_prs, my_prs) = tokio::join!(
+                check_gh_cli(),
+                fetch_review_prs(),
+                fetch_my_prs()
+            );
+            auth_result?;
+            perf_log("fetch all PRs (parallel)", fetch_start.elapsed().as_millis());
 
-        let total = review_prs.len() + my_prs.len();
-        if total == 0 {
-            eprintln!("No open PRs found.");
-            return Ok(());
+            let review_prs = review_prs?;
+            let my_prs = my_prs?;
+
+            // Save to cache for next time
+            cache::save_cache(&review_prs, &my_prs);
+
+            let total = review_prs.len() + my_prs.len();
+            if total == 0 {
+                eprintln!("No open PRs found.");
+                return Ok(());
+            }
+
+            perf_log("startup (total)", startup_start.elapsed().as_millis());
+            eprintln!(
+                "Found {} PRs for review, {} of your PRs. Starting viewer...",
+                review_prs.len(),
+                my_prs.len()
+            );
+
+            let mut app = App::new_with_prs(review_prs, my_prs);
+            app.run()?;
         }
-
-        eprintln!(
-            "Found {} PRs for review, {} of your PRs. Starting viewer...",
-            review_prs.len(),
-            my_prs.len()
-        );
-
-        let mut app = App::new_with_prs(review_prs, my_prs);
-        app.run()?;
     }
 
     Ok(())
