@@ -76,6 +76,7 @@ pub struct App {
     pub config: Config,
     focus: Focus,
     should_quit: bool,
+    confirm_quit: bool,
     tree_scroll: usize,
     search_mode: bool,
     search_query: String,
@@ -189,6 +190,7 @@ impl App {
             config,
             focus: Focus::Tree,
             should_quit: false,
+            confirm_quit: false,
             tree_scroll: 0,
             search_mode: false,
             search_query: String::new(),
@@ -303,6 +305,7 @@ impl App {
             config,
             focus: Focus::Tree,
             should_quit: false,
+            confirm_quit: false,
             tree_scroll: 0,
             search_mode: false,
             search_query: String::new(),
@@ -608,6 +611,20 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        // Handle quit confirmation dialog
+        if self.confirm_quit {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    self.should_quit = true;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.confirm_quit = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // If loading, only allow quit
         if matches!(self.loading, LoadingState::Loading(_)) {
             if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
@@ -663,7 +680,7 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('q') => self.request_quit(),
             KeyCode::Esc => {
                 if self.repo_filter.is_some() {
                     // Clear repo filter
@@ -675,7 +692,7 @@ impl App {
                     self.pr_search_query.clear();
                     self.update_filtered_pr_indices();
                 } else {
-                    self.should_quit = true;
+                    self.request_quit();
                 }
             }
             KeyCode::Char('/') => {
@@ -1255,7 +1272,7 @@ impl App {
                     self.screen = Screen::PrList;
                     self.current_pr = None;
                 } else {
-                    self.should_quit = true;
+                    self.request_quit();
                 }
             }
             KeyCode::Esc => {
@@ -1271,7 +1288,7 @@ impl App {
                     self.screen = Screen::PrList;
                     self.current_pr = None;
                 } else {
-                    self.should_quit = true;
+                    self.request_quit();
                 }
             }
             KeyCode::Char('/') => {
@@ -2212,8 +2229,6 @@ impl App {
         self.scroll_offset += amount;
     }
 
-<<<<<<< Updated upstream
-=======
     /// Request to quit the application, respecting the confirm_quit config setting
     fn request_quit(&mut self) {
         if self.config.navigation.confirm_quit {
@@ -2223,7 +2238,6 @@ impl App {
         }
     }
 
->>>>>>> Stashed changes
     fn render(&self, frame: &mut ratatui::Frame) {
         // Show loading/error overlay if active
         match &self.loading {
@@ -2255,6 +2269,11 @@ impl App {
         // Render PR description overlay if active
         if self.show_pr_description {
             self.render_pr_description(frame);
+        }
+
+        // Render quit confirmation dialog if active
+        if self.confirm_quit {
+            self.render_confirm_quit(frame);
         }
     }
 
@@ -2604,6 +2623,47 @@ impl App {
             inner.y + inner.height - 1,
             "Press any key to continue",
             Style::default().fg(Color::Rgb(150, 100, 100)).bg(bg),
+        );
+    }
+
+    fn render_confirm_quit(&self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
+        let popup_width = 40u16.min(area.width.saturating_sub(4));
+        let popup_area = Self::centered_popup(area, popup_width, 5);
+
+        // Clear popup background
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(35, 35, 50));
+
+        let block = Block::default()
+            .title(" Quit ")
+            .title_style(Style::default().fg(Color::Rgb(200, 200, 220)).add_modifier(Modifier::BOLD))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(100, 100, 140)));
+
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+
+        let buf = frame.buffer_mut();
+        let bg = Color::Rgb(35, 35, 50);
+
+        // Question
+        let msg = "Are you sure you want to quit?";
+        let msg_x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+        buf.set_string(
+            msg_x,
+            inner.y,
+            msg,
+            Style::default().fg(Color::Rgb(200, 200, 220)).bg(bg),
+        );
+
+        // Options
+        let options = "(y)es  (n)o";
+        let opt_x = inner.x + (inner.width.saturating_sub(options.len() as u16)) / 2;
+        buf.set_string(
+            opt_x,
+            inner.y + 2,
+            options,
+            Style::default().fg(Color::Rgb(140, 140, 180)).bg(bg),
         );
     }
 

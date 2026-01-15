@@ -104,6 +104,9 @@ pub struct NavigationSettings {
 
     /// Collapse folders by default in the file tree
     pub collapse_folders_by_default: bool,
+
+    /// Show confirmation dialog before quitting
+    pub confirm_quit: bool,
 }
 
 impl Default for NavigationSettings {
@@ -113,6 +116,7 @@ impl Default for NavigationSettings {
             horizontal_scroll_columns: 10,
             tree_width: 45,
             collapse_folders_by_default: false,
+            confirm_quit: true,
         }
     }
 }
@@ -312,6 +316,9 @@ tree_width = 45
 
 # Start with all folders collapsed in the file tree
 collapse_folders_by_default = false
+
+# Show confirmation dialog before quitting (q/Esc)
+confirm_quit = true
 "#.to_string()
     }
 
@@ -592,6 +599,7 @@ tab_width = 8
         assert_eq!(config.navigation.horizontal_scroll_columns, 10);
         assert_eq!(config.navigation.tree_width, 45);
         assert!(!config.navigation.collapse_folders_by_default);
+        assert!(config.navigation.confirm_quit);
     }
 
     #[test]
@@ -632,6 +640,7 @@ scroll_lines = 20
 horizontal_scroll_columns = 5
 tree_width = 60
 collapse_folders_by_default = true
+confirm_quit = false
 "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -639,6 +648,7 @@ collapse_folders_by_default = true
         assert_eq!(config.navigation.horizontal_scroll_columns, 5);
         assert_eq!(config.navigation.tree_width, 60);
         assert!(config.navigation.collapse_folders_by_default);
+        assert!(!config.navigation.confirm_quit);
     }
 
     #[test]

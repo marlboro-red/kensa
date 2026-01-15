@@ -146,6 +146,7 @@ scroll_lines = 15               # Lines to scroll with Ctrl+u/d
 horizontal_scroll_columns = 10  # Columns to scroll with h/l
 tree_width = 45                 # File tree panel width
 collapse_folders_by_default = false # Start with folders collapsed
+confirm_quit = true             # Show confirmation dialog on quit
 ```
 
 ### Tab/Indentation Settings
