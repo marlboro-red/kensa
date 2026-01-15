@@ -20,13 +20,12 @@ pub fn parse_diff(diff: &str) -> Vec<DiffFile> {
 
     while i < lines.len() {
         // Look for diff --git header
-        if lines[i].starts_with("diff --git ") {
-            if let Some((file, consumed)) = parse_file(&lines[i..]) {
+        if lines[i].starts_with("diff --git ")
+            && let Some((file, consumed)) = parse_file(&lines[i..]) {
                 files.push(file);
                 i += consumed;
                 continue;
             }
-        }
         i += 1;
     }
 
@@ -59,9 +58,7 @@ fn parse_file(lines: &[&str]) -> Option<(DiffFile, usize)> {
             status = FileStatus::Added;
         } else if line.starts_with("deleted file mode") {
             status = FileStatus::Deleted;
-        } else if line.starts_with("rename from ") {
-            status = FileStatus::Renamed;
-        } else if line.starts_with("similarity index ") {
+        } else if line.starts_with("rename from ") || line.starts_with("similarity index ") {
             status = FileStatus::Renamed;
         } else if line.starts_with("--- ") {
             // Start of actual diff content, skip this line
@@ -91,13 +88,12 @@ fn parse_file(lines: &[&str]) -> Option<(DiffFile, usize)> {
             break;
         }
 
-        if line.starts_with("@@ ") {
-            if let Some((hunk, consumed)) = parse_hunk(&lines[i..]) {
+        if line.starts_with("@@ ")
+            && let Some((hunk, consumed)) = parse_hunk(&lines[i..]) {
                 hunks.push(hunk);
                 i += consumed;
                 continue;
             }
-        }
 
         i += 1;
     }

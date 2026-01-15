@@ -735,11 +735,10 @@ pub async fn submit_pr_review(
     });
 
     // Add body if provided
-    if let Some(body_text) = body {
-        if !body_text.is_empty() {
+    if let Some(body_text) = body
+        && !body_text.is_empty() {
             request_body["body"] = serde_json::json!(body_text);
         }
-    }
 
     // Add inline comments and commit_id if we have any
     if !review_comments.is_empty() {

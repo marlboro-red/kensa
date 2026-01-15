@@ -1,14 +1,16 @@
+//! TUI module for the kensa PR review application.
+
+mod helpers;
+mod tree;
+mod types;
+
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Stdout};
+use std::io::Stdout;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -23,120 +25,16 @@ use crate::config::Config;
 use crate::syntax::Highlighter;
 use crate::types::{CommentThread, DiffFile, LineKind, PendingComment, ReviewPr};
 
-/// A node in the file tree (either a folder or a file)
-#[derive(Debug, Clone)]
-enum TreeNode {
-    Folder {
-        name: String,
-        path: String,
-        children: Vec<TreeNode>,
-    },
-    File {
-        name: String,
-        index: usize, // Index into App.files
-    },
-}
+// Re-export public types
+pub use types::{CommentMode, HelpMode, LoadingState, PrListTab, Screen, ViewMode};
 
-/// A flattened tree item for rendering
-#[derive(Debug, Clone)]
-enum TreeItem {
-    Folder {
-        path: String,
-        name: String,
-        depth: usize,
-        is_last: bool,
-        ancestors_last: Vec<bool>,
-    },
-    File {
-        index: usize,
-        name: String,
-        depth: usize,
-        is_last: bool,
-        ancestors_last: Vec<bool>,
-    },
-}
+// Internal type imports
+use types::{Focus, TreeItem, TreeNode};
 
-/// Which screen is currently active
-#[derive(Clone, PartialEq, Eq)]
-pub enum Screen {
-    PrList,
-    DiffView,
-}
-
-/// Focus state for the diff view UI
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Focus {
-    Tree,
-    Diff,
-}
-
-/// View mode for diff display
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ViewMode {
-    Unified,
-    Split,
-}
-
-/// Loading state for async operations
-#[derive(Clone, PartialEq, Eq)]
-pub enum LoadingState {
-    Idle,
-    Loading(String), // Message to display
-    Success(String),
-    Error(String),
-}
-
-/// Which PR list tab is active
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum PrListTab {
-    ForReview,
-    MyPrs,
-}
-
-/// Comment input mode
-#[derive(Clone, PartialEq, Eq)]
-pub enum CommentMode {
-    None,
-    /// Editing a comment: (text, optional (file_path, start_line, end_line) for inline)
-    Editing {
-        text: String,
-        inline_context: Option<(String, u32, Option<u32>)>, // (path, end_line, optional start_line)
-    },
-    ViewingPending, // Viewing list of pending comments
-    /// Viewing list of existing comment threads
-    ViewingThreads {
-        selected: usize,
-        scroll: usize,
-    },
-    /// Viewing a single thread's details
-    ViewingThread {
-        index: usize,
-        selected: usize,
-        scroll: usize,
-    },
-    /// Composing a reply to a thread
-    ReplyingToThread {
-        index: usize,
-        text: String,
-    },
-    /// Submitting a PR review (approve/request changes/comment)
-    SubmittingReview {
-        selected_action: usize, // 0=Approve, 1=Request Changes, 2=Comment Only
-        body: String,           // Optional review comment
-        editing_body: bool,     // True when typing in comment area
-        reviewing_drafts: bool, // True when reviewing draft comments before submission
-        selected_draft: usize,  // Which draft is selected (when reviewing_drafts)
-        editing_draft: bool,    // True when editing selected draft text
-    },
-}
-
-/// Help display state
-#[derive(Clone, PartialEq, Eq)]
-pub enum HelpMode {
-    None,
-    PrList,
-    DiffView,
-}
+// Type aliases to reduce complexity warnings
+type DiffResultReceiver =
+    mpsc::Receiver<Result<(Vec<DiffFile>, Option<String>, Option<String>), String>>;
+type PrListReceiver = mpsc::Receiver<Result<(Vec<ReviewPr>, Vec<ReviewPr>), String>>;
 
 /// Application state
 pub struct App {
@@ -186,7 +84,7 @@ pub struct App {
     selected_tree_item: Option<String>,
 
     // For async diff loading
-    diff_receiver: Option<mpsc::Receiver<Result<(Vec<DiffFile>, Option<String>, Option<String>), String>>>, // (files, head_sha, body)
+    diff_receiver: Option<DiffResultReceiver>, // (files, head_sha, body)
     current_pr: Option<ReviewPr>,
 
     // Comment drafting
@@ -215,7 +113,7 @@ pub struct App {
 
     // Async receivers for non-blocking operations
     comment_threads_receiver: Option<mpsc::Receiver<Result<Vec<CommentThread>, String>>>,
-    pr_list_receiver: Option<mpsc::Receiver<Result<(Vec<ReviewPr>, Vec<ReviewPr>), String>>>,
+    pr_list_receiver: Option<PrListReceiver>,
     comment_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,
     reply_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>, // thread_index on success
     review_submit_receiver: Option<mpsc::Receiver<Result<(String, usize), String>>>, // (review action, comments count) on success
@@ -519,320 +417,18 @@ impl App {
         }
     }
 
-    // ========================================================================
-    // Tree Building
-    // ========================================================================
-
-    /// Invalidate the tree cache (call when files or filters change)
-    fn invalidate_tree_cache(&mut self) {
-        self.cached_tree = None;
-        self.cached_flat_items = None;
-    }
-
-    /// Ensure flat items cache is populated (builds if needed)
-    fn ensure_flat_items_cached(&mut self) {
-        if self.cached_flat_items.is_none() {
-            let tree = self.build_tree_internal();
-            let flat_items = self.flatten_tree(&tree);
-            self.cached_tree = Some(tree);
-            self.cached_flat_items = Some(flat_items);
-        }
-    }
-
-    /// Get cached flat items for navigation (call ensure_flat_items_cached first)
-    fn get_flat_items(&self) -> &[TreeItem] {
-        self.cached_flat_items.as_deref().unwrap_or(&[])
-    }
-
-    /// Collect all folder paths from the current files
-    fn collect_folder_paths(&self) -> HashSet<String> {
-        let mut folders = HashSet::new();
-        for file in &self.files {
-            let parts: Vec<&str> = file.path.split('/').collect();
-            // Build all folder paths (all but the last part which is the filename)
-            for i in 1..parts.len() {
-                let folder_path = parts[..i].join("/");
-                folders.insert(folder_path);
-            }
-        }
-        folders
-    }
-
-    /// Initialize collapsed_folders based on config setting
-    fn init_collapsed_folders(&mut self) {
-        if self.config.navigation.collapse_folders_by_default {
-            self.collapsed_folders = self.collect_folder_paths();
-            // Select the first root folder so the user can navigate
-            let mut root_folders: Vec<_> = self
-                .files
-                .iter()
-                .filter(|f| f.path.contains('/'))
-                .filter_map(|f| f.path.split('/').next())
-                .collect();
-            root_folders.sort();
-            root_folders.dedup();
-            self.selected_tree_item = root_folders.first().map(|s| s.to_string());
-        } else {
-            self.collapsed_folders.clear();
-            self.selected_tree_item = None;
-        }
-    }
-
-    /// Build a tree structure from the flat file list
-    fn build_tree(&self) -> Vec<TreeNode> {
-        self.build_tree_internal()
-    }
-
-    /// Internal tree building (used by both cached and uncached paths)
-    fn build_tree_internal(&self) -> Vec<TreeNode> {
-        let mut root: HashMap<String, TreeNode> = HashMap::new();
-
-        // Only include filtered files
-        for &file_idx in &self.filtered_indices {
-            let file = &self.files[file_idx];
-            let parts: Vec<&str> = file.path.split('/').collect();
-
-            if parts.len() == 1 {
-                // File at root level
-                root.insert(
-                    file.path.clone(),
-                    TreeNode::File {
-                        name: file.path.clone(),
-                        index: file_idx,
-                    },
-                );
-            } else {
-                // File in a subdirectory - build path
-                self.insert_into_tree(&mut root, &parts, file_idx);
-            }
-        }
-
-        // Convert HashMap to sorted Vec
-        let mut nodes: Vec<TreeNode> = root.into_values().collect();
-        self.sort_tree_nodes(&mut nodes);
-        nodes
-    }
-
-    fn insert_into_tree(
-        &self,
-        root: &mut HashMap<String, TreeNode>,
-        parts: &[&str],
-        file_idx: usize,
-    ) {
-        if parts.is_empty() {
-            return;
-        }
-
-        let first = parts[0];
-
-        if parts.len() == 1 {
-            // This is a file
-            root.insert(
-                first.to_string(),
-                TreeNode::File {
-                    name: first.to_string(),
-                    index: file_idx,
-                },
-            );
-        } else {
-            // This is a folder
-            let first_folder_path = first.to_string();
-
-            let folder = root
-                .entry(first.to_string())
-                .or_insert_with(|| TreeNode::Folder {
-                    name: first.to_string(),
-                    path: first_folder_path,
-                    children: Vec::new(),
-                });
-
-            if let TreeNode::Folder { children, path, .. } = folder {
-                // Update path to be the full path up to this folder
-                if parts.len() > 1 {
-                    *path = parts[0].to_string();
-                }
-                let mut child_map: HashMap<String, TreeNode> = children
-                    .drain(..)
-                    .map(|n| {
-                        let key = match &n {
-                            TreeNode::Folder { name, .. } => name.clone(),
-                            TreeNode::File { name, .. } => name.clone(),
-                        };
-                        (key, n)
-                    })
-                    .collect();
-
-                self.insert_into_tree_nested(&mut child_map, &parts[1..], file_idx, &parts[..1]);
-
-                *children = child_map.into_values().collect();
-            }
-        }
-    }
-
-    fn insert_into_tree_nested(
-        &self,
-        parent: &mut HashMap<String, TreeNode>,
-        parts: &[&str],
-        file_idx: usize,
-        prefix: &[&str],
-    ) {
-        if parts.is_empty() {
-            return;
-        }
-
-        let first = parts[0];
-
-        if parts.len() == 1 {
-            // This is a file
-            parent.insert(
-                first.to_string(),
-                TreeNode::File {
-                    name: first.to_string(),
-                    index: file_idx,
-                },
-            );
-        } else {
-            // This is a folder
-            let mut full_path_parts: Vec<&str> = prefix.to_vec();
-            full_path_parts.push(first);
-            let folder_path = full_path_parts.join("/");
-
-            let folder = parent
-                .entry(first.to_string())
-                .or_insert_with(|| TreeNode::Folder {
-                    name: first.to_string(),
-                    path: folder_path.clone(),
-                    children: Vec::new(),
-                });
-
-            if let TreeNode::Folder { children, .. } = folder {
-                let mut child_map: HashMap<String, TreeNode> = children
-                    .drain(..)
-                    .map(|n| {
-                        let key = match &n {
-                            TreeNode::Folder { name, .. } => name.clone(),
-                            TreeNode::File { name, .. } => name.clone(),
-                        };
-                        (key, n)
-                    })
-                    .collect();
-
-                self.insert_into_tree_nested(
-                    &mut child_map,
-                    &parts[1..],
-                    file_idx,
-                    &full_path_parts,
-                );
-
-                *children = child_map.into_values().collect();
-            }
-        }
-    }
-
-    fn sort_tree_nodes(&self, nodes: &mut [TreeNode]) {
-        nodes.sort_by(|a, b| {
-            match (a, b) {
-                // Folders come before files
-                (TreeNode::Folder { name: a, .. }, TreeNode::Folder { name: b, .. }) => a.cmp(b),
-                (TreeNode::File { name: a, .. }, TreeNode::File { name: b, .. }) => a.cmp(b),
-                (TreeNode::Folder { .. }, TreeNode::File { .. }) => std::cmp::Ordering::Less,
-                (TreeNode::File { .. }, TreeNode::Folder { .. }) => std::cmp::Ordering::Greater,
-            }
-        });
-
-        for node in nodes.iter_mut() {
-            if let TreeNode::Folder { children, .. } = node {
-                self.sort_tree_nodes(children);
-            }
-        }
-    }
-
-    /// Flatten the tree into a list of items for rendering
-    fn flatten_tree(&self, nodes: &[TreeNode]) -> Vec<TreeItem> {
-        let mut items = Vec::new();
-        self.flatten_tree_recursive(nodes, 0, &mut items, &[]);
-        items
-    }
-
-    fn flatten_tree_recursive(
-        &self,
-        nodes: &[TreeNode],
-        depth: usize,
-        items: &mut Vec<TreeItem>,
-        ancestors_last: &[bool],
-    ) {
-        let len = nodes.len();
-        for (i, node) in nodes.iter().enumerate() {
-            let is_last = i == len - 1;
-            let mut current_ancestors: Vec<bool> = ancestors_last.to_vec();
-
-            match node {
-                TreeNode::Folder {
-                    name,
-                    path,
-                    children,
-                } => {
-                    items.push(TreeItem::Folder {
-                        path: path.clone(),
-                        name: name.clone(),
-                        depth,
-                        is_last,
-                        ancestors_last: current_ancestors.clone(),
-                    });
-
-                    // Only show children if folder is expanded
-                    if !self.collapsed_folders.contains(path) {
-                        current_ancestors.push(is_last);
-                        self.flatten_tree_recursive(children, depth + 1, items, &current_ancestors);
-                    }
-                }
-                TreeNode::File { name, index } => {
-                    items.push(TreeItem::File {
-                        index: *index,
-                        name: name.clone(),
-                        depth,
-                        is_last,
-                        ancestors_last: current_ancestors,
-                    });
-                }
-            }
-        }
-    }
-
-    /// Get the tree prefix characters for a given depth and position
-    fn get_tree_prefix(&self, _depth: usize, is_last: bool, ancestors_last: &[bool]) -> String {
-        let mut prefix = String::new();
-
-        for &ancestor_is_last in ancestors_last {
-            if ancestor_is_last {
-                prefix.push_str("  ");
-            } else {
-                prefix.push_str("│ ");
-            }
-        }
-
-        // Add tree branch characters for all items
-        if is_last {
-            prefix.push_str("└─");
-        } else {
-            prefix.push_str("├─");
-        }
-
-        prefix
-    }
-
     pub fn run(&mut self) -> Result<()> {
-        let mut terminal = setup_terminal()?;
+        let mut terminal = helpers::setup_terminal()?;
         let result = self.event_loop(&mut terminal);
-        restore_terminal(&mut terminal)?;
+        helpers::restore_terminal(&mut terminal)?;
         result
     }
 
     fn event_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         loop {
             // Check for async diff loading completion
-            if let Some(ref receiver) = self.diff_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.diff_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok((files, head_sha, body)) => {
                             let file_count = files.len();
@@ -860,11 +456,10 @@ impl App {
                     }
                     self.diff_receiver = None;
                 }
-            }
 
             // Check for async comment threads loading completion
-            if let Some(ref receiver) = self.comment_threads_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.comment_threads_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok(threads) => {
                             self.build_line_to_threads_map(&threads);
@@ -879,11 +474,10 @@ impl App {
                     }
                     self.comment_threads_receiver = None;
                 }
-            }
 
             // Check for async PR list refresh completion
-            if let Some(ref receiver) = self.pr_list_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.pr_list_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok((mut review_prs, mut my_prs)) => {
                             // Sort by repo for proper grouping
@@ -929,11 +523,10 @@ impl App {
                     }
                     self.pr_list_receiver = None;
                 }
-            }
 
             // Check for async comment submission completion
-            if let Some(ref receiver) = self.comment_submit_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.comment_submit_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok(submitted) => {
                             self.pending_comments.clear();
@@ -950,11 +543,10 @@ impl App {
                     }
                     self.comment_submit_receiver = None;
                 }
-            }
 
             // Check for async reply submission completion
-            if let Some(ref receiver) = self.reply_submit_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.reply_submit_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok(thread_index) => {
                             self.loading = LoadingState::Success("Reply submitted!".to_string());
@@ -972,11 +564,10 @@ impl App {
                     }
                     self.reply_submit_receiver = None;
                 }
-            }
 
             // Check for async review submission completion
-            if let Some(ref receiver) = self.review_submit_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.review_submit_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok((event, comments_count)) => {
                             let base_msg = match event.as_str() {
@@ -1000,17 +591,14 @@ impl App {
                     }
                     self.review_submit_receiver = None;
                 }
-            }
 
             terminal.draw(|f| self.render(f))?;
 
-            if event::poll(Duration::from_millis(50))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
+            if event::poll(Duration::from_millis(50))?
+                && let Event::Key(key) = event::read()?
+                    && key.kind == KeyEventKind::Press {
                         self.handle_key(key);
                     }
-                }
-            }
 
             if self.should_quit {
                 break;
@@ -1382,7 +970,7 @@ impl App {
                 let mut total_lines = 0;
                 for comment in &thread.comments {
                     total_lines += 1; // Header
-                    total_lines += Self::wrap_text(&comment.body, wrap_width).len();
+                    total_lines += helpers::wrap_text(&comment.body, wrap_width).len();
                     total_lines += 1; // Separator
                 }
                 total_lines.saturating_sub(20) // Approximate visible height
@@ -1857,11 +1445,10 @@ impl App {
             return;
         }
         let selected = self.current_selected_pr();
-        if let Some(pos) = indices.iter().position(|&i| i == selected) {
-            if pos < indices.len() - 1 {
+        if let Some(pos) = indices.iter().position(|&i| i == selected)
+            && pos < indices.len() - 1 {
                 self.set_current_selected_pr(indices[pos + 1]);
             }
-        }
     }
 
     fn move_pr_up(&mut self) {
@@ -1870,11 +1457,10 @@ impl App {
             return;
         }
         let selected = self.current_selected_pr();
-        if let Some(pos) = indices.iter().position(|&i| i == selected) {
-            if pos > 0 {
+        if let Some(pos) = indices.iter().position(|&i| i == selected)
+            && pos > 0 {
                 self.set_current_selected_pr(indices[pos - 1]);
             }
-        }
     }
 
     fn cycle_repo_filter(&mut self) {
@@ -1920,19 +1506,16 @@ impl App {
                 if !self
                     .filtered_review_pr_indices
                     .contains(&self.selected_review_pr)
-                {
-                    if let Some(&first) = self.filtered_review_pr_indices.first() {
+                    && let Some(&first) = self.filtered_review_pr_indices.first() {
                         self.selected_review_pr = first;
                     }
-                }
                 self.review_pr_scroll = 0;
             }
             PrListTab::MyPrs => {
-                if !self.filtered_my_pr_indices.contains(&self.selected_my_pr) {
-                    if let Some(&first) = self.filtered_my_pr_indices.first() {
+                if !self.filtered_my_pr_indices.contains(&self.selected_my_pr)
+                    && let Some(&first) = self.filtered_my_pr_indices.first() {
                         self.selected_my_pr = first;
                     }
-                }
                 self.my_pr_scroll = 0;
             }
         }
@@ -1940,11 +1523,10 @@ impl App {
 
     fn pr_matches_filter(&self, pr: &ReviewPr, query: &str) -> bool {
         // Filter by repo
-        if let Some(ref filter) = self.repo_filter {
-            if &pr.repo_full_name() != filter {
+        if let Some(ref filter) = self.repo_filter
+            && &pr.repo_full_name() != filter {
                 return false;
             }
-        }
         // Filter by search query
         if !query.is_empty() {
             let searchable = format!(
@@ -2239,7 +1821,7 @@ impl App {
     fn pending_comment_count_for_file(&self, file_path: &str) -> usize {
         self.pending_comments
             .iter()
-            .filter(|c| c.file_path.as_ref().map(|p| p.as_str()) == Some(file_path))
+            .filter(|c| c.file_path.as_deref() == Some(file_path))
             .count()
     }
 
@@ -2281,11 +1863,10 @@ impl App {
                 .collect();
         }
         // Ensure selected file is in filtered list, or select first match
-        if !self.filtered_indices.contains(&self.selected_file) {
-            if let Some(&first) = self.filtered_indices.first() {
+        if !self.filtered_indices.contains(&self.selected_file)
+            && let Some(&first) = self.filtered_indices.first() {
                 self.select_file(first);
             }
-        }
         // Reset tree scroll
         self.tree_scroll = 0;
         // Invalidate tree cache when filter changes
@@ -2864,7 +2445,7 @@ impl App {
         // PR description body with text wrapping
         let body = pr.body.as_deref().unwrap_or("(No description provided)");
         let max_width = (inner.width.saturating_sub(2)) as usize;
-        let wrapped_lines = Self::wrap_text_with_code(body, max_width);
+        let wrapped_lines = helpers::wrap_text_with_code(body, max_width);
         let content_height = (inner.height.saturating_sub(4)) as usize; // Leave room for header, separator, footer
         let total_lines = wrapped_lines.len();
 
@@ -3530,7 +3111,7 @@ impl App {
                 buf.set_string(
                     mode_x,
                     area.y + 1,
-                    &format!(" {} ", focus_mode),
+                    format!(" {} ", focus_mode),
                     Style::default()
                         .fg(Color::Rgb(180, 180, 200))
                         .bg(Color::Rgb(45, 45, 60)),
@@ -3664,7 +3245,7 @@ impl App {
             buf.set_string(
                 area.x + 1,
                 area.y,
-                &format!(" {} ", focus_mode),
+                format!(" {} ", focus_mode),
                 Style::default()
                     .fg(Color::Rgb(180, 180, 200))
                     .bg(Color::Rgb(45, 45, 60)),
@@ -3811,7 +3392,7 @@ impl App {
             if line.is_empty() {
                 wrapped_lines.push(String::new());
             } else {
-                wrapped_lines.extend(Self::wrap_text(line, wrap_width));
+                wrapped_lines.extend(helpers::wrap_text(line, wrap_width));
             }
         }
         // Handle case where text ends with newline or is empty
@@ -4179,7 +3760,7 @@ impl App {
                 );
 
                 // Word-wrap the comment body
-                let wrapped = Self::wrap_text_with_code(&first_comment.body, wrap_width);
+                let wrapped = helpers::wrap_text_with_code(&first_comment.body, wrap_width);
 
                 for (line_idx, (line, is_code)) in wrapped.iter().take(available_height).enumerate() {
                     let y = content_start_y + line_idx as u16;
@@ -4266,12 +3847,12 @@ impl App {
 
         for comment in &thread.comments {
             // Author and timestamp
-            let time_ago = Self::format_relative_time(&comment.created_at);
+            let time_ago = helpers::format_relative_time(&comment.created_at);
             let header = format!("@{} - {}", comment.author, time_ago);
             all_lines.push((header, header_style));
 
             // Comment body (word-wrapped, with code block detection)
-            let wrapped = Self::wrap_text_with_code(&comment.body, wrap_width);
+            let wrapped = helpers::wrap_text_with_code(&comment.body, wrap_width);
             for (line, is_code) in wrapped {
                 if is_code {
                     all_lines.push((format!("  │ {}", line), code_style));
@@ -4331,7 +3912,7 @@ impl App {
             if line.is_empty() {
                 wrapped_lines.push(String::new());
             } else {
-                wrapped_lines.extend(Self::wrap_text(line, wrap_width));
+                wrapped_lines.extend(helpers::wrap_text(line, wrap_width));
             }
         }
         if text.is_empty() || text.ends_with('\n') {
@@ -4356,6 +3937,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_review_modal(
         &self,
         frame: &mut ratatui::Frame,
@@ -4505,7 +4087,7 @@ impl App {
                 if line.is_empty() {
                     wrapped_lines.push(String::new());
                 } else {
-                    wrapped_lines.extend(Self::wrap_text(line, wrap_width));
+                    wrapped_lines.extend(helpers::wrap_text(line, wrap_width));
                 }
             }
             if body.is_empty() || body.ends_with('\n') {
@@ -4513,11 +4095,10 @@ impl App {
             }
 
             // Add cursor if editing
-            if editing_body {
-                if let Some(last) = wrapped_lines.last_mut() {
+            if editing_body
+                && let Some(last) = wrapped_lines.last_mut() {
                     last.push('_');
                 }
-            }
 
             for (i, line) in wrapped_lines.iter().enumerate() {
                 let y = body_start_y + i as u16;
@@ -4738,85 +4319,6 @@ impl App {
         );
     }
 
-    /// Format time as relative (e.g., "2h ago", "3d ago")
-    fn format_relative_time(iso_time: &str) -> String {
-        chrono::DateTime::parse_from_rfc3339(iso_time)
-            .map(|dt| {
-                let now = chrono::Utc::now();
-                let diff = now.signed_duration_since(dt);
-                if diff.num_hours() < 1 {
-                    format!("{}m ago", diff.num_minutes())
-                } else if diff.num_days() < 1 {
-                    format!("{}h ago", diff.num_hours())
-                } else {
-                    format!("{}d ago", diff.num_days())
-                }
-            })
-            .unwrap_or_else(|_| iso_time.to_string())
-    }
-
-    /// Character-based text wrapping - breaks at width boundary
-    /// Returns Vec of (line, is_code_block)
-    fn wrap_text_with_code(text: &str, width: usize) -> Vec<(String, bool)> {
-        if width == 0 {
-            return vec![(text.to_string(), false)];
-        }
-
-        let mut result = Vec::new();
-        let mut in_code_block = false;
-
-        // First split by newlines, then wrap each line
-        for line in text.split('\n') {
-            // Detect code block markers
-            let trimmed = line.trim();
-            if trimmed.starts_with("```") {
-                in_code_block = !in_code_block;
-                // Skip the ``` marker line itself
-                continue;
-            }
-
-            if line.is_empty() {
-                result.push((String::new(), in_code_block));
-                continue;
-            }
-
-            // For code blocks, preserve exact whitespace and don't wrap aggressively
-            if in_code_block {
-                // Expand tabs first, then truncate if needed
-                let expanded = line.replace('\t', "    ");
-                let chars: Vec<char> = expanded.chars().collect();
-                if chars.len() > width {
-                    result.push((chars[..width].iter().collect(), true));
-                } else {
-                    result.push((expanded, true));
-                }
-            } else {
-                let chars: Vec<char> = line.chars().collect();
-                let mut i = 0;
-                while i < chars.len() {
-                    let end = (i + width).min(chars.len());
-                    let wrapped_line: String = chars[i..end].iter().collect();
-                    result.push((wrapped_line, false));
-                    i = end;
-                }
-            }
-        }
-
-        if result.is_empty() {
-            result.push((String::new(), false));
-        }
-
-        result
-    }
-
-    /// Simple wrap_text for non-code content
-    fn wrap_text(text: &str, width: usize) -> Vec<String> {
-        Self::wrap_text_with_code(text, width)
-            .into_iter()
-            .map(|(line, _)| line)
-            .collect()
-    }
-
     fn render_tree(&self, frame: &mut ratatui::Frame, area: Rect) {
         let is_focused = self.focus == Focus::Tree || self.search_mode;
         let border_style = if is_focused {
@@ -4984,7 +4486,7 @@ impl App {
                     let pending_count = self.pending_comment_count_for_file(&file.path);
                     let thread_count = self.comment_threads
                         .iter()
-                        .filter(|t| t.file_path.as_ref().map(|p| p.as_str()) == Some(&file.path))
+                        .filter(|t| t.file_path.as_deref() == Some(&file.path))
                         .count();
 
                     // Calculate space for badges at end
@@ -5057,7 +4559,7 @@ impl App {
     fn render_diff(&self, frame: &mut ratatui::Frame, area: Rect) {
         // First, fill the ENTIRE area with background color directly in the buffer
         let buf = frame.buffer_mut();
-        fill_area(buf, area, self.bg_color());
+        helpers::fill_area(buf, area, self.bg_color());
 
         let Some(file) = self.files.get(self.selected_file) else {
             let block = Block::default()
@@ -5097,7 +4599,7 @@ impl App {
         }
 
         // Fill inner area with background
-        fill_area(frame.buffer_mut(), inner_area, self.bg_color());
+        helpers::fill_area(frame.buffer_mut(), inner_area, self.bg_color());
 
         match self.view_mode {
             ViewMode::Unified => self.render_unified_direct(frame.buffer_mut(), inner_area, file),
@@ -5183,7 +4685,7 @@ impl App {
                     };
                     buf.set_string(area.x, y, cursor_marker, marker_style);
 
-                    let text = truncate_or_pad(header, (area.width as usize).saturating_sub(1));
+                    let text = helpers::truncate_or_pad(header, (area.width as usize).saturating_sub(1));
                     buf.set_string(
                         area.x + 1,
                         y,
@@ -5317,7 +4819,7 @@ impl App {
                         if x_offset >= max_x {
                             break;
                         }
-                        buf.set_string(x_offset, y, &ch.to_string(), default_style);
+                        buf.set_string(x_offset, y, ch.to_string(), default_style);
                         x_offset += 1;
                     }
 
@@ -5337,7 +4839,7 @@ impl App {
                                 if x_offset >= max_x {
                                     break;
                                 }
-                                buf.set_string(x_offset, y, &ch.to_string(), span_style);
+                                buf.set_string(x_offset, y, ch.to_string(), span_style);
                                 x_offset += 1;
                                 char_idx += 1;
                             }
@@ -5469,7 +4971,7 @@ impl App {
                 }
             }
             Some(SplitLine::Hunk(header)) => {
-                let text = truncate_or_pad(header, width as usize);
+                let text = helpers::truncate_or_pad(header, width as usize);
                 buf.set_string(
                     x,
                     y,
@@ -5492,6 +4994,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_split_content_line(
         &self,
         buf: &mut Buffer,
@@ -5552,7 +5055,7 @@ impl App {
             if x_offset >= max_x {
                 break;
             }
-            buf.set_string(x_offset, y, &ch.to_string(), default_style);
+            buf.set_string(x_offset, y, ch.to_string(), default_style);
             x_offset += 1;
         }
 
@@ -5572,7 +5075,7 @@ impl App {
                     if x_offset >= max_x {
                         break;
                     }
-                    buf.set_string(x_offset, y, &ch.to_string(), span_style);
+                    buf.set_string(x_offset, y, ch.to_string(), span_style);
                     x_offset += 1;
                     char_idx += 1;
                 }
@@ -5600,80 +5103,3 @@ enum SplitLine {
     Context { ln: u32, content: String },
 }
 
-/// Fill an entire area with a background color
-fn fill_area(buf: &mut Buffer, area: Rect, color: Color) {
-    let style = Style::default().bg(color);
-    for y in area.y..area.y + area.height {
-        for x in area.x..area.x + area.width {
-            buf.set_string(x, y, " ", style);
-        }
-    }
-}
-
-/// Truncate or pad a string to exactly the given width
-fn truncate_or_pad(s: &str, width: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() >= width {
-        chars[..width].iter().collect()
-    } else {
-        let mut result: String = chars.into_iter().collect();
-        result.push_str(&" ".repeat(width - result.len()));
-        result
-    }
-}
-
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let terminal = Terminal::new(backend)?;
-    Ok(terminal)
-}
-
-fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_wrap_text_with_code_preserves_whitespace() {
-        let text = "Here is some code:\n```\n    indented line\n\tline with tab\n  two spaces\n```\nAfter code";
-        let result = App::wrap_text_with_code(text, 80);
-
-        // Find the code lines
-        let code_lines: Vec<_> = result.iter().filter(|(_, is_code)| *is_code).collect();
-
-        assert_eq!(code_lines.len(), 3, "Should have 3 code lines");
-        assert_eq!(code_lines[0].0, "    indented line", "Should preserve 4-space indent");
-        assert_eq!(code_lines[1].0, "    line with tab", "Tabs should be expanded to 4 spaces");
-        assert_eq!(code_lines[2].0, "  two spaces", "Should preserve 2-space indent");
-    }
-
-    #[test]
-    fn test_wrap_text_with_code_detects_blocks() {
-        let text = "Normal text\n```rust\nfn main() {}\n```\nMore text";
-        let result = App::wrap_text_with_code(text, 80);
-
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], ("Normal text".to_string(), false));
-        assert_eq!(result[1], ("fn main() {}".to_string(), true));
-        assert_eq!(result[2], ("More text".to_string(), false));
-    }
-
-    #[test]
-    fn test_wrap_text_with_code_empty_lines_in_code() {
-        let text = "```\nline1\n\nline2\n```";
-        let result = App::wrap_text_with_code(text, 80);
-
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], ("line1".to_string(), true));
-        assert_eq!(result[1], (String::new(), true)); // empty line in code block
-        assert_eq!(result[2], ("line2".to_string(), true));
-    }
-}
