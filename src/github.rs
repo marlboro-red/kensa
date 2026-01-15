@@ -1,10 +1,30 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::process::Stdio;
+use std::time::Instant;
 use tokio::process::Command;
 use url::Url;
 
 use crate::types::{CommentThread, IssueComment, PendingComment, PrInfo, ReviewComment, ReviewPr, ThreadComment};
+
+/// Log performance timing to file if KENSA_DEBUG is set
+#[inline]
+fn perf_log(operation: &str, elapsed_ms: u128) {
+    if std::env::var("KENSA_DEBUG").is_ok() {
+        use std::io::Write;
+        if let Some(mut path) = dirs::config_dir() {
+            path.push("kensa");
+            path.push("perf.log");
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(file, "{:>6}ms  {}", elapsed_ms, operation);
+            }
+        }
+    }
+}
 
 /// Parse a GitHub PR URL into owner, repo, and PR number
 pub fn parse_pr_url(url_str: &str) -> Result<PrInfo> {
@@ -41,6 +61,7 @@ pub fn parse_pr_url(url_str: &str) -> Result<PrInfo> {
 
 /// Check if gh CLI is installed and authenticated
 pub async fn check_gh_cli() -> Result<()> {
+    let start = Instant::now();
     let output = Command::new("gh")
         .args(["auth", "status"])
         .stdout(Stdio::null())
@@ -48,6 +69,8 @@ pub async fn check_gh_cli() -> Result<()> {
         .output()
         .await
         .context("Failed to run 'gh' CLI. Is it installed? (brew install gh)")?;
+
+    perf_log("gh auth status", start.elapsed().as_millis());
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -64,6 +87,7 @@ pub async fn check_gh_cli() -> Result<()> {
 
 /// Fetch the diff content for a PR using gh CLI
 pub async fn fetch_pr_diff(pr: &PrInfo) -> Result<String> {
+    let start = Instant::now();
     let output = Command::new("gh")
         .args([
             "api",
@@ -74,6 +98,8 @@ pub async fn fetch_pr_diff(pr: &PrInfo) -> Result<String> {
         .output()
         .await
         .context("Failed to fetch PR diff")?;
+
+    perf_log(&format!("fetch_pr_diff #{}", pr.number), start.elapsed().as_millis());
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -122,6 +148,7 @@ struct GhAuthor {
 
 /// Common helper for searching PRs with a specific filter
 async fn search_prs_with_filter(filter: &str) -> Result<Vec<ReviewPr>> {
+    let start = Instant::now();
     let output = Command::new("gh")
         .args([
             "search",
@@ -134,6 +161,8 @@ async fn search_prs_with_filter(filter: &str) -> Result<Vec<ReviewPr>> {
         .output()
         .await
         .context("Failed to fetch PRs. Is 'gh' CLI installed?")?;
+
+    perf_log(&format!("gh search prs {}", filter), start.elapsed().as_millis());
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -172,11 +201,14 @@ async fn search_prs_with_filter(filter: &str) -> Result<Vec<ReviewPr>> {
 
 /// Get the current authenticated GitHub username
 async fn get_current_user() -> Result<String> {
+    let start = Instant::now();
     let output = Command::new("gh")
         .args(["api", "user", "--jq", ".login"])
         .output()
         .await
         .context("Failed to get current user")?;
+
+    perf_log("gh api user", start.elapsed().as_millis());
 
     if !output.status.success() {
         return Err(anyhow!("Failed to get current user"));
@@ -187,6 +219,8 @@ async fn get_current_user() -> Result<String> {
 
 /// Fetch all PRs where review is requested or already reviewed by the current user
 pub async fn fetch_review_prs() -> Result<Vec<ReviewPr>> {
+    let start = Instant::now();
+
     // Fetch current user, requested PRs, and reviewed PRs in parallel
     let (current_user, requested, reviewed) = tokio::join!(
         get_current_user(),
@@ -214,6 +248,7 @@ pub async fn fetch_review_prs() -> Result<Vec<ReviewPr>> {
         }
     }
 
+    perf_log("fetch_review_prs (total)", start.elapsed().as_millis());
     Ok(prs)
 }
 
@@ -252,6 +287,7 @@ pub async fn fetch_pr_head_sha(pr: &PrInfo) -> Result<String> {
 /// Fetch full PR details from a PrInfo (for direct URL mode)
 /// Returns a ReviewPr with all fields populated including head_sha and body
 pub async fn fetch_pr_details(pr: &PrInfo) -> Result<ReviewPr> {
+    let start = Instant::now();
     let output = Command::new("gh")
         .args([
             "pr",
@@ -264,6 +300,8 @@ pub async fn fetch_pr_details(pr: &PrInfo) -> Result<ReviewPr> {
         .output()
         .await
         .context("Failed to fetch PR details")?;
+
+    perf_log(&format!("fetch_pr_details #{}", pr.number), start.elapsed().as_millis());
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
