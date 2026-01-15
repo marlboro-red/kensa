@@ -144,24 +144,22 @@ async fn main() -> Result<()> {
                         }
                         Ok(_) => {
                             // Restore backup on failure
-                            if renamed {
-                                if let (Some(exe), Some(backup)) =
+                            if renamed
+                                && let (Some(exe), Some(backup)) =
                                     (&current_exe, &backup_path)
                                 {
                                     let _ = std::fs::rename(backup, exe);
                                 }
-                            }
                             eprintln!("\n\x1b[31mUpgrade failed.\x1b[0m");
                         }
                         Err(e) => {
                             // Restore backup on failure
-                            if renamed {
-                                if let (Some(exe), Some(backup)) =
+                            if renamed
+                                && let (Some(exe), Some(backup)) =
                                     (&current_exe, &backup_path)
                                 {
                                     let _ = std::fs::rename(backup, exe);
                                 }
-                            }
                             eprintln!("\n\x1b[31mFailed to run cargo: {}\x1b[0m", e);
                         }
                     }

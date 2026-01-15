@@ -23,6 +23,10 @@ use crate::config::Config;
 use crate::syntax::Highlighter;
 use crate::types::{CommentThread, DiffFile, LineKind, PendingComment, ReviewPr};
 
+// Type aliases to reduce complexity warnings
+type DiffResultReceiver = mpsc::Receiver<Result<(Vec<DiffFile>, Option<String>, Option<String>), String>>;
+type PrListReceiver = mpsc::Receiver<Result<(Vec<ReviewPr>, Vec<ReviewPr>), String>>;
+
 /// A node in the file tree (either a folder or a file)
 #[derive(Debug, Clone)]
 enum TreeNode {
@@ -186,7 +190,7 @@ pub struct App {
     selected_tree_item: Option<String>,
 
     // For async diff loading
-    diff_receiver: Option<mpsc::Receiver<Result<(Vec<DiffFile>, Option<String>, Option<String>), String>>>, // (files, head_sha, body)
+    diff_receiver: Option<DiffResultReceiver>, // (files, head_sha, body)
     current_pr: Option<ReviewPr>,
 
     // Comment drafting
@@ -215,7 +219,7 @@ pub struct App {
 
     // Async receivers for non-blocking operations
     comment_threads_receiver: Option<mpsc::Receiver<Result<Vec<CommentThread>, String>>>,
-    pr_list_receiver: Option<mpsc::Receiver<Result<(Vec<ReviewPr>, Vec<ReviewPr>), String>>>,
+    pr_list_receiver: Option<PrListReceiver>,
     comment_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>,
     reply_submit_receiver: Option<mpsc::Receiver<Result<usize, String>>>, // thread_index on success
     review_submit_receiver: Option<mpsc::Receiver<Result<(String, usize), String>>>, // (review action, comments count) on success
@@ -831,8 +835,8 @@ impl App {
     fn event_loop(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
         loop {
             // Check for async diff loading completion
-            if let Some(ref receiver) = self.diff_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.diff_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok((files, head_sha, body)) => {
                             let file_count = files.len();
@@ -860,11 +864,10 @@ impl App {
                     }
                     self.diff_receiver = None;
                 }
-            }
 
             // Check for async comment threads loading completion
-            if let Some(ref receiver) = self.comment_threads_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.comment_threads_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok(threads) => {
                             self.build_line_to_threads_map(&threads);
@@ -879,11 +882,10 @@ impl App {
                     }
                     self.comment_threads_receiver = None;
                 }
-            }
 
             // Check for async PR list refresh completion
-            if let Some(ref receiver) = self.pr_list_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.pr_list_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok((mut review_prs, mut my_prs)) => {
                             // Sort by repo for proper grouping
@@ -929,11 +931,10 @@ impl App {
                     }
                     self.pr_list_receiver = None;
                 }
-            }
 
             // Check for async comment submission completion
-            if let Some(ref receiver) = self.comment_submit_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.comment_submit_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok(submitted) => {
                             self.pending_comments.clear();
@@ -950,11 +951,10 @@ impl App {
                     }
                     self.comment_submit_receiver = None;
                 }
-            }
 
             // Check for async reply submission completion
-            if let Some(ref receiver) = self.reply_submit_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.reply_submit_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok(thread_index) => {
                             self.loading = LoadingState::Success("Reply submitted!".to_string());
@@ -972,11 +972,10 @@ impl App {
                     }
                     self.reply_submit_receiver = None;
                 }
-            }
 
             // Check for async review submission completion
-            if let Some(ref receiver) = self.review_submit_receiver {
-                if let Ok(result) = receiver.try_recv() {
+            if let Some(ref receiver) = self.review_submit_receiver
+                && let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok((event, comments_count)) => {
                             let base_msg = match event.as_str() {
@@ -1000,17 +999,14 @@ impl App {
                     }
                     self.review_submit_receiver = None;
                 }
-            }
 
             terminal.draw(|f| self.render(f))?;
 
-            if event::poll(Duration::from_millis(50))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
+            if event::poll(Duration::from_millis(50))?
+                && let Event::Key(key) = event::read()?
+                    && key.kind == KeyEventKind::Press {
                         self.handle_key(key);
                     }
-                }
-            }
 
             if self.should_quit {
                 break;
@@ -1857,11 +1853,10 @@ impl App {
             return;
         }
         let selected = self.current_selected_pr();
-        if let Some(pos) = indices.iter().position(|&i| i == selected) {
-            if pos < indices.len() - 1 {
+        if let Some(pos) = indices.iter().position(|&i| i == selected)
+            && pos < indices.len() - 1 {
                 self.set_current_selected_pr(indices[pos + 1]);
             }
-        }
     }
 
     fn move_pr_up(&mut self) {
@@ -1870,11 +1865,10 @@ impl App {
             return;
         }
         let selected = self.current_selected_pr();
-        if let Some(pos) = indices.iter().position(|&i| i == selected) {
-            if pos > 0 {
+        if let Some(pos) = indices.iter().position(|&i| i == selected)
+            && pos > 0 {
                 self.set_current_selected_pr(indices[pos - 1]);
             }
-        }
     }
 
     fn cycle_repo_filter(&mut self) {
@@ -1920,19 +1914,16 @@ impl App {
                 if !self
                     .filtered_review_pr_indices
                     .contains(&self.selected_review_pr)
-                {
-                    if let Some(&first) = self.filtered_review_pr_indices.first() {
+                    && let Some(&first) = self.filtered_review_pr_indices.first() {
                         self.selected_review_pr = first;
                     }
-                }
                 self.review_pr_scroll = 0;
             }
             PrListTab::MyPrs => {
-                if !self.filtered_my_pr_indices.contains(&self.selected_my_pr) {
-                    if let Some(&first) = self.filtered_my_pr_indices.first() {
+                if !self.filtered_my_pr_indices.contains(&self.selected_my_pr)
+                    && let Some(&first) = self.filtered_my_pr_indices.first() {
                         self.selected_my_pr = first;
                     }
-                }
                 self.my_pr_scroll = 0;
             }
         }
@@ -1940,11 +1931,10 @@ impl App {
 
     fn pr_matches_filter(&self, pr: &ReviewPr, query: &str) -> bool {
         // Filter by repo
-        if let Some(ref filter) = self.repo_filter {
-            if &pr.repo_full_name() != filter {
+        if let Some(ref filter) = self.repo_filter
+            && &pr.repo_full_name() != filter {
                 return false;
             }
-        }
         // Filter by search query
         if !query.is_empty() {
             let searchable = format!(
@@ -2239,7 +2229,7 @@ impl App {
     fn pending_comment_count_for_file(&self, file_path: &str) -> usize {
         self.pending_comments
             .iter()
-            .filter(|c| c.file_path.as_ref().map(|p| p.as_str()) == Some(file_path))
+            .filter(|c| c.file_path.as_deref() == Some(file_path))
             .count()
     }
 
@@ -2281,11 +2271,10 @@ impl App {
                 .collect();
         }
         // Ensure selected file is in filtered list, or select first match
-        if !self.filtered_indices.contains(&self.selected_file) {
-            if let Some(&first) = self.filtered_indices.first() {
+        if !self.filtered_indices.contains(&self.selected_file)
+            && let Some(&first) = self.filtered_indices.first() {
                 self.select_file(first);
             }
-        }
         // Reset tree scroll
         self.tree_scroll = 0;
         // Invalidate tree cache when filter changes
@@ -3530,7 +3519,7 @@ impl App {
                 buf.set_string(
                     mode_x,
                     area.y + 1,
-                    &format!(" {} ", focus_mode),
+                    format!(" {} ", focus_mode),
                     Style::default()
                         .fg(Color::Rgb(180, 180, 200))
                         .bg(Color::Rgb(45, 45, 60)),
@@ -3664,7 +3653,7 @@ impl App {
             buf.set_string(
                 area.x + 1,
                 area.y,
-                &format!(" {} ", focus_mode),
+                format!(" {} ", focus_mode),
                 Style::default()
                     .fg(Color::Rgb(180, 180, 200))
                     .bg(Color::Rgb(45, 45, 60)),
@@ -4356,6 +4345,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_review_modal(
         &self,
         frame: &mut ratatui::Frame,
@@ -4513,11 +4503,10 @@ impl App {
             }
 
             // Add cursor if editing
-            if editing_body {
-                if let Some(last) = wrapped_lines.last_mut() {
+            if editing_body
+                && let Some(last) = wrapped_lines.last_mut() {
                     last.push('_');
                 }
-            }
 
             for (i, line) in wrapped_lines.iter().enumerate() {
                 let y = body_start_y + i as u16;
@@ -4984,7 +4973,7 @@ impl App {
                     let pending_count = self.pending_comment_count_for_file(&file.path);
                     let thread_count = self.comment_threads
                         .iter()
-                        .filter(|t| t.file_path.as_ref().map(|p| p.as_str()) == Some(&file.path))
+                        .filter(|t| t.file_path.as_deref() == Some(&file.path))
                         .count();
 
                     // Calculate space for badges at end
@@ -5317,7 +5306,7 @@ impl App {
                         if x_offset >= max_x {
                             break;
                         }
-                        buf.set_string(x_offset, y, &ch.to_string(), default_style);
+                        buf.set_string(x_offset, y, ch.to_string(), default_style);
                         x_offset += 1;
                     }
 
@@ -5337,7 +5326,7 @@ impl App {
                                 if x_offset >= max_x {
                                     break;
                                 }
-                                buf.set_string(x_offset, y, &ch.to_string(), span_style);
+                                buf.set_string(x_offset, y, ch.to_string(), span_style);
                                 x_offset += 1;
                                 char_idx += 1;
                             }
@@ -5492,6 +5481,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_split_content_line(
         &self,
         buf: &mut Buffer,
@@ -5552,7 +5542,7 @@ impl App {
             if x_offset >= max_x {
                 break;
             }
-            buf.set_string(x_offset, y, &ch.to_string(), default_style);
+            buf.set_string(x_offset, y, ch.to_string(), default_style);
             x_offset += 1;
         }
 
@@ -5572,7 +5562,7 @@ impl App {
                     if x_offset >= max_x {
                         break;
                     }
-                    buf.set_string(x_offset, y, &ch.to_string(), span_style);
+                    buf.set_string(x_offset, y, ch.to_string(), span_style);
                     x_offset += 1;
                     char_idx += 1;
                 }
