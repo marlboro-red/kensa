@@ -2232,7 +2232,7 @@ impl App {
     /// Request to quit the application, respecting the confirm_quit config setting
     fn request_quit(&mut self) {
         if self.config.navigation.confirm_quit {
-            self.request_quit();
+            self.confirm_quit = true;
         } else {
             self.should_quit = true;
         }
