@@ -75,7 +75,7 @@ pub struct PrInfo {
 }
 
 /// A PR awaiting review
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReviewPr {
     pub number: u32,
     pub title: String,
