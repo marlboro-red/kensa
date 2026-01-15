@@ -1,3 +1,4 @@
+mod cache;
 mod config;
 mod drafts;
 mod github;
@@ -318,36 +319,54 @@ async fn main() -> Result<()> {
         app.run()?;
     } else {
         // PR list mode - show PRs awaiting review and my PRs
-        eprintln!("Fetching PRs...");
+        // Try to load from cache for instant startup
+        if let Some(cached) = cache::load_cache() {
+            perf_log("loaded from cache", startup_start.elapsed().as_millis());
+            eprintln!(
+                "Loaded {} PRs for review, {} of your PRs from cache. Refreshing...",
+                cached.review_prs.len(),
+                cached.my_prs.len()
+            );
 
-        // Fetch auth and both PR lists concurrently
-        let fetch_start = Instant::now();
-        let (auth_result, review_prs, my_prs) = tokio::join!(
-            check_gh_cli(),
-            fetch_review_prs(),
-            fetch_my_prs()
-        );
-        auth_result?;
-        perf_log("fetch all PRs (parallel)", fetch_start.elapsed().as_millis());
+            // Start app with cached data, it will refresh in background
+            let mut app = App::new_with_prs(cached.review_prs, cached.my_prs);
+            app.trigger_background_refresh();
+            app.run()?;
+        } else {
+            // No cache - fetch normally
+            eprintln!("Fetching PRs...");
 
-        let review_prs = review_prs?;
-        let my_prs = my_prs?;
+            let fetch_start = Instant::now();
+            let (auth_result, review_prs, my_prs) = tokio::join!(
+                check_gh_cli(),
+                fetch_review_prs(),
+                fetch_my_prs()
+            );
+            auth_result?;
+            perf_log("fetch all PRs (parallel)", fetch_start.elapsed().as_millis());
 
-        let total = review_prs.len() + my_prs.len();
-        if total == 0 {
-            eprintln!("No open PRs found.");
-            return Ok(());
+            let review_prs = review_prs?;
+            let my_prs = my_prs?;
+
+            // Save to cache for next time
+            cache::save_cache(&review_prs, &my_prs);
+
+            let total = review_prs.len() + my_prs.len();
+            if total == 0 {
+                eprintln!("No open PRs found.");
+                return Ok(());
+            }
+
+            perf_log("startup (total)", startup_start.elapsed().as_millis());
+            eprintln!(
+                "Found {} PRs for review, {} of your PRs. Starting viewer...",
+                review_prs.len(),
+                my_prs.len()
+            );
+
+            let mut app = App::new_with_prs(review_prs, my_prs);
+            app.run()?;
         }
-
-        perf_log("startup (total)", startup_start.elapsed().as_millis());
-        eprintln!(
-            "Found {} PRs for review, {} of your PRs. Starting viewer...",
-            review_prs.len(),
-            my_prs.len()
-        );
-
-        let mut app = App::new_with_prs(review_prs, my_prs);
-        app.run()?;
     }
 
     Ok(())

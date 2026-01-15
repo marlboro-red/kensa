@@ -1588,6 +1588,35 @@ impl App {
         });
     }
 
+    /// Trigger a background refresh without showing loading state
+    /// Used when starting with cached data
+    pub fn trigger_background_refresh(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.pr_list_receiver = Some(rx);
+
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(async {
+                let (review_result, my_result) = tokio::join!(
+                    crate::github::fetch_review_prs(),
+                    crate::github::fetch_my_prs()
+                );
+
+                match (review_result, my_result) {
+                    (Ok(review_prs), Ok(my_prs)) => {
+                        // Save to cache
+                        crate::cache::save_cache(&review_prs, &my_prs);
+                        Ok((review_prs, my_prs))
+                    }
+                    (Err(e), _) => Err(e.to_string()),
+                    (_, Err(e)) => Err(e.to_string()),
+                }
+            });
+
+            let _ = tx.send(result);
+        });
+    }
+
     fn refresh_pr_list(&mut self) {
         // Non-blocking async refresh - results are processed in event_loop
         self.loading = LoadingState::Loading("Refreshing PRs...".to_string());
@@ -1605,7 +1634,11 @@ impl App {
                 );
 
                 match (review_result, my_result) {
-                    (Ok(review_prs), Ok(my_prs)) => Ok((review_prs, my_prs)),
+                    (Ok(review_prs), Ok(my_prs)) => {
+                        // Save to cache
+                        crate::cache::save_cache(&review_prs, &my_prs);
+                        Ok((review_prs, my_prs))
+                    }
                     (Err(e), _) => Err(e.to_string()),
                     (_, Err(e)) => Err(e.to_string()),
                 }
