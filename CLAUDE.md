@@ -38,12 +38,11 @@ cargo fmt -- --check     # Check formatting without changing files
 ### Module Structure
 
 - **main.rs** - Entry point, CLI parsing (clap), startup modes (PR list, direct URL, user PRs)
-- **ui/mod.rs** - TUI application state and rendering (ratatui/crossterm). Contains the `App` struct which manages:
-  - Screen state (PR list vs diff view)
-  - PR list tabs (For Review / My PRs)
-  - Diff viewer with file tree, syntax highlighting, and cursor navigation
-  - Comment drafting system (inline, multi-line, general)
-  - Visual mode for selecting line ranges
+- **ui/** - TUI module (ratatui/crossterm)
+  - **mod.rs** - `App` struct, event loop, key handling, and rendering. Manages screen state, PR lists, diff viewer, comment drafting, and visual mode
+  - **types.rs** - UI state enums (`Screen`, `ViewMode`, `CommentMode`, `HelpMode`, `LoadingState`, `Focus`, `PrListTab`) and tree types (`TreeNode`, `TreeItem`)
+  - **helpers.rs** - Terminal setup/restore, text wrapping, time formatting utilities
+  - **tree.rs** - File tree building, caching, and navigation logic
 - **github.rs** - GitHub API interactions via `gh` CLI subprocess calls. Handles PR fetching, diff retrieval, and comment submission
 - **parser.rs** - Unified diff parser that extracts files, hunks, and diff lines with line numbers
 - **types.rs** - Core data types: `DiffFile`, `DiffLine`, `Hunk`, `ReviewPr`, `PendingComment`, `CommentThread`
