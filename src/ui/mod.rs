@@ -83,6 +83,7 @@ pub struct App {
     filtered_indices: Vec<usize>,
     collapsed_folders: HashSet<String>,
     selected_tree_item: Option<String>,
+    tree_collapsed: bool, // Hide the file tree panel entirely
 
     // For async diff loading
     diff_receiver: Option<DiffResultReceiver>, // (files, head_sha, body)
@@ -201,6 +202,7 @@ impl App {
             filtered_indices: (0..file_count).collect(),
             collapsed_folders,
             selected_tree_item,
+            tree_collapsed: false,
 
             diff_receiver: None,
             current_pr: None,
@@ -319,6 +321,7 @@ impl App {
             filtered_indices: Vec::new(),
             collapsed_folders: HashSet::new(),
             selected_tree_item: None,
+            tree_collapsed: false,
 
             diff_receiver: None,
             current_pr: None,
@@ -1353,6 +1356,7 @@ impl App {
             KeyCode::Char('L') => self.scroll_right(),
             KeyCode::Enter | KeyCode::Tab => self.toggle_focus(),
             KeyCode::Char('d') => self.toggle_view_mode(),
+            KeyCode::Char('b') => self.toggle_tree_collapsed(),
             KeyCode::Char('x') => self.toggle_collapse(),
             KeyCode::Char('g') => self.scroll_to_top(),
             KeyCode::Char('G') => self.scroll_to_bottom(),
@@ -2269,6 +2273,14 @@ impl App {
         };
     }
 
+    fn toggle_tree_collapsed(&mut self) {
+        self.tree_collapsed = !self.tree_collapsed;
+        // When collapsing tree, switch focus to diff since tree is hidden
+        if self.tree_collapsed && self.focus == Focus::Tree {
+            self.focus = Focus::Diff;
+        }
+    }
+
     fn toggle_collapse(&mut self) {
         // If a folder is selected, toggle its collapse state
         if let Some(ref folder_path) = self.selected_tree_item {
@@ -2423,6 +2435,7 @@ impl App {
                 ]),
                 ("View", vec![
                     ("Tab", "Toggle tree/diff"),
+                    ("b", "Toggle file tree"),
                     ("d", "Toggle split view"),
                     ("i", "View PR description"),
                     ("x", "Collapse folder"),
@@ -3399,14 +3412,19 @@ impl App {
             }
 
             // Render diff content in remaining area
-            let tree_width = self.config.navigation.tree_width;
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(tree_width), Constraint::Min(0)])
-                .split(content_area);
+            if self.tree_collapsed {
+                // Tree is hidden, use full width for diff
+                self.render_diff(frame, content_area);
+            } else {
+                let tree_width = self.config.navigation.tree_width;
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Length(tree_width), Constraint::Min(0)])
+                    .split(content_area);
 
-            self.render_tree(frame, chunks[0]);
-            self.render_diff(frame, chunks[1]);
+                self.render_tree(frame, chunks[0]);
+                self.render_diff(frame, chunks[1]);
+            }
 
             // Render comment overlay if active
             self.render_comment_overlay(frame, area);
@@ -3461,14 +3479,19 @@ impl App {
                 Style::default().fg(Color::Rgb(140, 140, 160)).bg(status_bg),
             );
 
-            let tree_width = self.config.navigation.tree_width;
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(tree_width), Constraint::Min(0)])
-                .split(content_area);
+            if self.tree_collapsed {
+                // Tree is hidden, use full width for diff
+                self.render_diff(frame, content_area);
+            } else {
+                let tree_width = self.config.navigation.tree_width;
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Length(tree_width), Constraint::Min(0)])
+                    .split(content_area);
 
-            self.render_tree(frame, chunks[0]);
-            self.render_diff(frame, chunks[1]);
+                self.render_tree(frame, chunks[0]);
+                self.render_diff(frame, chunks[1]);
+            }
         }
     }
 
