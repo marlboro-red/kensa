@@ -648,6 +648,11 @@ impl App {
                     self.review_submit_receiver = None;
                 }
 
+            // Ensure tree cache is populated before rendering to avoid rebuilding on every frame
+            if self.screen == Screen::DiffView && !self.tree_collapsed {
+                self.ensure_flat_items_cached();
+            }
+
             terminal.draw(|f| self.render(f))?;
 
             if event::poll(Duration::from_millis(50))?
@@ -4573,9 +4578,8 @@ impl App {
             return;
         }
 
-        // Build and flatten tree
-        let tree = self.build_tree();
-        let flat_items = self.flatten_tree(&tree);
+        // Use cached flat items (cache is populated before render in the event loop)
+        let flat_items = self.get_flat_items();
 
         // Calculate visible range with scrolling
         let visible_height = inner_area.height as usize;
