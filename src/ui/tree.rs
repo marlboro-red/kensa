@@ -61,12 +61,7 @@ impl App {
         }
     }
 
-    /// Build a tree structure from the flat file list
-    pub(super) fn build_tree(&self) -> Vec<TreeNode> {
-        self.build_tree_internal()
-    }
-
-    /// Internal tree building (used by both cached and uncached paths)
+    /// Build a tree structure from the flat file list (used by caching system)
     fn build_tree_internal(&self) -> Vec<TreeNode> {
         let mut root: HashMap<String, TreeNode> = HashMap::new();
 
