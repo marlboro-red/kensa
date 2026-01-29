@@ -49,10 +49,25 @@ pub fn load_drafts(pr: &PrInfo) -> Vec<PendingComment> {
 
     let content = match fs::read_to_string(&file_path) {
         Ok(c) => c,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            eprintln!(
+                "Warning: Failed to read draft file {:?}: {}",
+                file_path, e
+            );
+            return Vec::new();
+        }
     };
 
-    serde_json::from_str(&content).unwrap_or_default()
+    match serde_json::from_str(&content) {
+        Ok(drafts) => drafts,
+        Err(e) => {
+            eprintln!(
+                "Warning: Draft file {:?} contains invalid JSON and could not be loaded: {}",
+                file_path, e
+            );
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]

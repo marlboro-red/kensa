@@ -156,7 +156,7 @@ async fn search_prs_with_filter(filter: &str) -> Result<Vec<ReviewPr>> {
             filter,
             "--state=open",
             "--json=number,title,repository,author,createdAt,url",
-            "--limit=100",
+            "--limit=500",
         ])
         .output()
         .await

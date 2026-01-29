@@ -77,6 +77,7 @@ pub struct App {
     focus: Focus,
     should_quit: bool,
     confirm_quit: bool,
+    confirm_delete_draft: bool,
     tree_scroll: usize,
     search_mode: bool,
     search_query: String,
@@ -196,6 +197,7 @@ impl App {
             focus: Focus::Tree,
             should_quit: false,
             confirm_quit: false,
+            confirm_delete_draft: false,
             tree_scroll: 0,
             search_mode: false,
             search_query: String::new(),
@@ -315,6 +317,7 @@ impl App {
             focus: Focus::Tree,
             should_quit: false,
             confirm_quit: false,
+            confirm_delete_draft: false,
             tree_scroll: 0,
             search_mode: false,
             search_query: String::new(),
@@ -683,6 +686,33 @@ impl App {
             return;
         }
 
+        // Handle delete draft confirmation dialog
+        if self.confirm_delete_draft {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    // Actually delete the draft
+                    if !self.pending_comments.is_empty() {
+                        self.pending_comments.remove(self.selected_pending_comment);
+                        if self.selected_pending_comment >= self.pending_comments.len() {
+                            self.selected_pending_comment =
+                                self.pending_comments.len().saturating_sub(1);
+                        }
+                        self.save_current_drafts();
+                        // Close viewing mode if no more drafts
+                        if self.pending_comments.is_empty() {
+                            self.comment_mode = CommentMode::None;
+                        }
+                    }
+                    self.confirm_delete_draft = false;
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                    self.confirm_delete_draft = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // If loading, only allow quit
         if matches!(self.loading, LoadingState::Loading(_)) {
             if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
@@ -916,17 +946,9 @@ impl App {
                     }
                 }
                 KeyCode::Char('d') | KeyCode::Delete => {
-                    // Delete selected comment
+                    // Show confirmation dialog before deleting
                     if !self.pending_comments.is_empty() {
-                        self.pending_comments.remove(self.selected_pending_comment);
-                        if self.selected_pending_comment >= self.pending_comments.len() {
-                            self.selected_pending_comment =
-                                self.pending_comments.len().saturating_sub(1);
-                        }
-                        self.save_current_drafts();
-                        if self.pending_comments.is_empty() {
-                            self.comment_mode = CommentMode::None;
-                        }
+                        self.confirm_delete_draft = true;
                     }
                 }
                 KeyCode::Char('S') => {
@@ -1213,15 +1235,10 @@ impl App {
                         }
                     }
                     KeyCode::Char('d') | KeyCode::Char('x') => {
-                        // Delete selected draft
+                        // Show confirmation dialog before deleting
                         if draft_count > 0 && *selected_draft < draft_count {
-                            self.pending_comments.remove(*selected_draft);
-                            if *selected_draft >= self.pending_comments.len()
-                                && !self.pending_comments.is_empty()
-                            {
-                                *selected_draft = self.pending_comments.len() - 1;
-                            }
-                            self.save_current_drafts();
+                            self.selected_pending_comment = *selected_draft;
+                            self.confirm_delete_draft = true;
                         }
                     }
                     _ => {}
@@ -2381,6 +2398,11 @@ impl App {
         if self.confirm_quit {
             self.render_confirm_quit(frame);
         }
+
+        // Render delete draft confirmation dialog if active
+        if self.confirm_delete_draft {
+            self.render_confirm_delete_draft(frame);
+        }
     }
 
     fn render_help(&self, frame: &mut ratatui::Frame) {
@@ -2771,6 +2793,47 @@ impl App {
             inner.y + 2,
             options,
             Style::default().fg(Color::Rgb(140, 140, 180)).bg(bg),
+        );
+    }
+
+    fn render_confirm_delete_draft(&self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
+        let popup_width = 44u16.min(area.width.saturating_sub(4));
+        let popup_area = Self::centered_popup(area, popup_width, 5);
+
+        // Clear popup background
+        Self::clear_popup_background(frame.buffer_mut(), popup_area, Color::Rgb(50, 35, 35));
+
+        let block = Block::default()
+            .title(" Delete Draft ")
+            .title_style(Style::default().fg(Color::Rgb(220, 180, 180)).add_modifier(Modifier::BOLD))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Rgb(140, 100, 100)));
+
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+
+        let buf = frame.buffer_mut();
+        let bg = Color::Rgb(50, 35, 35);
+
+        // Question
+        let msg = "Delete this draft comment?";
+        let msg_x = inner.x + (inner.width.saturating_sub(msg.len() as u16)) / 2;
+        buf.set_string(
+            msg_x,
+            inner.y,
+            msg,
+            Style::default().fg(Color::Rgb(220, 200, 200)).bg(bg),
+        );
+
+        // Options
+        let options = "(y)es  (n)o";
+        let opt_x = inner.x + (inner.width.saturating_sub(options.len() as u16)) / 2;
+        buf.set_string(
+            opt_x,
+            inner.y + 2,
+            options,
+            Style::default().fg(Color::Rgb(180, 140, 140)).bg(bg),
         );
     }
 
